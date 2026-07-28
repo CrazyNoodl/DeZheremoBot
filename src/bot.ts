@@ -1,12 +1,12 @@
 import 'dotenv/config';
 import { Telegraf } from 'telegraf';
+import { handleAdminAction, handleAdminCommand } from './commands/admin.js';
 import { handleMyChatMember, handleNewChatTitle } from './commands/groupChat.js';
 import { buildGroupMenu, START_ADD_PREFIX, START_LIST_PREFIX } from './commands/keyboard.js';
 import { showSubmissionsList } from './commands/list.js';
 import { handleSubmitAction, showPersonalMenu, SUBMIT_ACTION } from './commands/menu.js';
 import { handleScheduleAction, handleScheduleCommand } from './commands/schedule.js';
 import { handleTextMessage } from './commands/text.js';
-import { registerDebugCommands } from './debug.js';
 import { startScheduler } from './scheduler.js';
 import { addGroupChat } from './storage/groupChats.js';
 
@@ -40,7 +40,8 @@ bot.on('new_chat_title', handleNewChatTitle);
 bot.action(SUBMIT_ACTION, handleSubmitAction);
 bot.action(/^sched:/, handleScheduleAction);
 bot.command('schedule', handleScheduleCommand);
-registerDebugCommands(bot); // TEMP: for manual testing, remove before real use
+bot.action(/^admin:/, handleAdminAction);
+bot.command('admin', handleAdminCommand);
 bot.on('text', handleTextMessage);
 
 bot.launch(() => {

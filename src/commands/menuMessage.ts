@@ -1,4 +1,5 @@
 import { Markup, type Context } from 'telegraf';
+import { escapeHtml, placeLink } from '../htmlFormat.js';
 import { getUserSubmission } from '../services/submissionService.js';
 import { getGroupChatTitle } from '../storage/groupChats.js';
 import { clearMenuMessage, getMenuMessage, setMenuMessage } from '../storage/menuMessages.js';
@@ -13,13 +14,13 @@ const MENU_MESSAGE_TTL_MS = 48 * 60 * 60 * 1000;
 // running this bot and the private chat only ever shows one shared card at a time.
 export function withGroupLabel(groupChatId: number, text: string): string {
   const title = getGroupChatTitle(groupChatId);
-  return title ? `📍 ${title}\n\n${text}` : text;
+  return title ? `📍 ${escapeHtml(title)}\n\n${text}` : text;
 }
 
 export function buildMenuText(groupChatId: number, userId: number): string {
   const submission = getUserSubmission(groupChatId, userId);
   return submission
-    ? `📍 Твій варіант цього тижня: ${submission.place}\n\nХочеш змінити — тисни кнопку нижче 👇`
+    ? `📍 Твій варіант цього тижня: ${placeLink(submission.place)}\n\nХочеш змінити — тисни кнопку нижче 👇`
     : '🤔 Ще нема варіанту на цей тиждень? Додай посилання на заклад — тисни кнопку нижче 👇';
 }
 
@@ -56,7 +57,7 @@ export async function sendMenuMessage(
   const privateChatId = ctx.chat?.id;
   if (!privateChatId) return;
 
-  const sent = await ctx.reply(withGroupLabel(groupChatId, text), keyboard);
+  const sent = await ctx.reply(withGroupLabel(groupChatId, text), { parse_mode: 'HTML', ...keyboard });
   trackMenuMessage(ctx, groupChatId, userId, privateChatId, sent.message_id);
 }
 
@@ -71,7 +72,10 @@ export async function updateMenuMessage(
 
   if (ref) {
     try {
-      await ctx.telegram.editMessageText(ref.chatId, ref.messageId, undefined, withGroupLabel(groupChatId, text), keyboard);
+      await ctx.telegram.editMessageText(ref.chatId, ref.messageId, undefined, withGroupLabel(groupChatId, text), {
+        parse_mode: 'HTML',
+        ...keyboard,
+      });
       setMenuMessage(userId, ref.chatId, ref.messageId, groupChatId); // this card now represents groupChatId's cycle
       return;
     } catch (err) {

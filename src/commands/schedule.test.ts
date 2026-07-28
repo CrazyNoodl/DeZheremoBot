@@ -114,33 +114,6 @@ test('handleScheduleAction still refuses "select" for a non-admin (pre-existing 
   assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
 });
 
-test('handleScheduleAction refuses "pause" for a user who is no longer an admin', async () => {
-  const userId = 20008;
-  const chatId = -20008;
-
-  const { ctx, rawCtx, alerts } = fakeCtx('member', userId);
-  withCallbackData(rawCtx, `sched:pause:${chatId}`);
-  await handleScheduleAction(ctx);
-
-  assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
-  assert.equal(isGroupPaused(chatId), false);
-});
-
-test('handleScheduleAction pauses and then resumes a group for a current admin', async () => {
-  const userId = 20009;
-  const chatId = -20009;
-
-  const { ctx: pauseCtx, rawCtx: pauseRawCtx } = fakeCtx('administrator', userId);
-  withCallbackData(pauseRawCtx, `sched:pause:${chatId}`);
-  await handleScheduleAction(pauseCtx);
-  assert.equal(isGroupPaused(chatId), true);
-
-  const { ctx: resumeCtx, rawCtx: resumeRawCtx } = fakeCtx('administrator', userId);
-  withCallbackData(resumeRawCtx, `sched:resume:${chatId}`);
-  await handleScheduleAction(resumeCtx);
-  assert.equal(isGroupPaused(chatId), false);
-});
-
 test('"reset" does not clear a group\'s paused state — pause is independent of schedule config', async () => {
   const userId = 20010;
   const chatId = -20010;

@@ -1,4 +1,5 @@
 import type { Context } from 'telegraf';
+import { escapeHtml, placeLink } from '../htmlFormat.js';
 import { clearAwaitingSubmission, getAwaitingChatId } from '../storage/pendingState.js';
 import { MAX_PLACE_LENGTH, submitPlace } from '../services/submissionService.js';
 import { sendToChat } from '../telegramBroadcast.js';
@@ -57,8 +58,8 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
 
   const previousPlace = result.previousPlace;
   const confirmation = previousPlace !== undefined
-    ? `Готово! Змінено на: ${place} (було: ${previousPlace}) 👍`
-    : `Готово! Додано: ${place} 🎉`;
+    ? `Готово! Змінено на: ${placeLink(place)} (було: ${placeLink(previousPlace)}) 👍`
+    : `Готово! Додано: ${placeLink(place)} 🎉`;
 
   await updateMenuMessage(
     ctx,
@@ -71,8 +72,9 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     ctx.telegram,
     chatId,
     previousPlace !== undefined
-      ? `🔄 ${username} оновлює варіант: ${previousPlace} → ${place}`
-      : `🍽 ${username} пропонує варіант: ${place}`,
+      ? `🔄 <b>${escapeHtml(username)}</b> оновлює варіант: ${placeLink(place)}`
+      : `🍽 <b>${escapeHtml(username)}</b> пропонує варіант: ${placeLink(place)}`,
+    { parse_mode: 'HTML' },
   );
   await ctx.deleteMessage();
 }

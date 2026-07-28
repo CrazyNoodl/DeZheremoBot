@@ -19,8 +19,8 @@ import {
   getScheduleMenuMessage,
   setScheduleMenuMessage,
 } from '../storage/scheduleMenuMessages.js';
-import { isGroupPaused, pauseGroup, resumeGroup } from '../services/submissionService.js';
-import { getGroupChatTitle, listGroupChats } from '../storage/groupChats.js';
+import { findAdminGroupChats, isGroupAdmin } from './access.js';
+import { getGroupChatTitle } from '../storage/groupChats.js';
 
 // Same 48h reasoning as MENU_MESSAGE_TTL_MS in menuMessage.ts: past this, Telegram refuses to edit the message.
 const SCHEDULE_PANEL_TTL_MS = 48 * 60 * 60 * 1000;
@@ -49,9 +49,8 @@ function formatWeekdays(weekdays: number[]): string {
     .join(', ');
 }
 
-function buildSummaryText(config: GroupScheduleConfig, paused: boolean): string {
+function buildSummaryText(config: GroupScheduleConfig): string {
   return (
-    (paused ? '⏸ Цикл призупинено — нагадування, закриття заявок і розіграш не виконуються\n\n' : '') +
     `⚙️ Розклад цієї групи\n\n` +
     `📅 Нагадування: ${formatWeekdays(config.reminderWeekdays)} о ${config.reminderTime}\n` +
     `🔒 Дедлайн (${WEEKDAY_LABELS[config.deadlineWeekday]}): закриття заявок ${config.lockTime}, жеребкування ${config.drawTime}`
@@ -59,16 +58,9 @@ function buildSummaryText(config: GroupScheduleConfig, paused: boolean): string 
 }
 
 function buildSummaryKeyboard(chatId: number) {
-  const paused = isGroupPaused(chatId);
   return Markup.inlineKeyboard([
     [Markup.button.callback('✏️ Дні та час нагадувань', `sched:edit_reminder:${chatId}`)],
     [Markup.button.callback('✏️ День та час дедлайну', `sched:edit_deadline:${chatId}`)],
-    [
-      Markup.button.callback(
-        paused ? '▶️ Відновити цикл' : '⏸ Призупинити цикл',
-        `sched:${paused ? 'resume' : 'pause'}:${chatId}`,
-      ),
-    ],
     [Markup.button.callback('↩️ Скинути на дефолт', `sched:reset:${chatId}`)],
   ]);
 }
@@ -151,19 +143,9 @@ async function safeAnswerCbQuery(ctx: Context, text?: string, extra?: { show_ale
   }
 }
 
-async function isGroupAdmin(ctx: Context, chatId: number, userId: number): Promise<boolean> {
-  const member = await ctx.telegram.getChatMember(chatId, userId);
-  return member.status === 'creator' || member.status === 'administrator';
-}
-
 async function renderSummary(ctx: Context, userId: number, chatId: number): Promise<void> {
   clearScheduleEditState(userId);
-  await updateSchedulePanel(
-    ctx,
-    userId,
-    buildSummaryText(getSchedule(chatId), isGroupPaused(chatId)),
-    buildSummaryKeyboard(chatId),
-  );
+  await updateSchedulePanel(ctx, userId, buildSummaryText(getSchedule(chatId)), buildSummaryKeyboard(chatId));
 }
 
 async function renderWeekdayToggleScreen(ctx: Context, userId: number, selected: Set<number>): Promise<void> {
@@ -192,18 +174,6 @@ export async function showScheduleMenu(ctx: Context, chatId: number): Promise<vo
   }
 
   await renderSummary(ctx, userId, chatId);
-}
-
-async function findAdminGroupChats(ctx: Context, userId: number): Promise<number[]> {
-  const adminChatIds: number[] = [];
-  for (const chatId of listGroupChats()) {
-    try {
-      if (await isGroupAdmin(ctx, chatId, userId)) adminChatIds.push(chatId);
-    } catch {
-      // bot lost access to this chat, or the lookup failed — treat as "not admin there"
-    }
-  }
-  return adminChatIds;
 }
 
 function buildGroupPickerKeyboard(chatIds: number[]) {
@@ -258,12 +228,7 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
   // на дефолт" button stays pressable indefinitely) or mid-wizard, and without this, someone
   // demoted after opening /schedule could still rewrite that group's schedule.
   const targetChatId =
-    action === 'select' ||
-    action === 'edit_reminder' ||
-    action === 'edit_deadline' ||
-    action === 'reset' ||
-    action === 'pause' ||
-    action === 'resume'
+    action === 'select' || action === 'edit_reminder' || action === 'edit_deadline' || action === 'reset'
       ? Number(arg)
       : action === 'day' || action === 'days_done' || action === 'back'
         ? getScheduleEditState(userId)?.chatId
@@ -314,20 +279,6 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
   if (action === 'reset') {
     const chatId = Number(arg);
     resetSchedule(chatId);
-    await renderSummary(ctx, userId, chatId);
-    return;
-  }
-
-  if (action === 'pause') {
-    const chatId = Number(arg);
-    pauseGroup(chatId);
-    await renderSummary(ctx, userId, chatId);
-    return;
-  }
-
-  if (action === 'resume') {
-    const chatId = Number(arg);
-    resumeGroup(chatId);
     await renderSummary(ctx, userId, chatId);
     return;
   }

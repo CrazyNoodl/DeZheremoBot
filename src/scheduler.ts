@@ -1,6 +1,8 @@
 import cron from 'node-cron';
 import type { Telegraf } from 'telegraf';
+import { buildDrawAnnouncement, pickRandomEmoji } from './announcements.js';
 import { buildGroupMenu } from './commands/keyboard.js';
+import { getKyivNow } from './kyivTime.js';
 import {
   isGroupPaused,
   lockSubmissions,
@@ -13,38 +15,10 @@ import { listGroupChats } from './storage/groupChats.js';
 import { getGroupSchedule } from './storage/groupSchedules.js';
 import { sendToChat } from './telegramBroadcast.js';
 
-const TIMEZONE = 'Europe/Kyiv';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const WEEKDAY_INDEX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-
-const kyivFormatter = new Intl.DateTimeFormat('en-US', {
-  timeZone: TIMEZONE,
-  hourCycle: 'h23',
-  weekday: 'short',
-  hour: '2-digit',
-  minute: '2-digit',
-});
-
-// en-CA formats dates as YYYY-MM-DD by default — used as the "which day is this" key for
-// fired_events, so a fired reminder/lock/draw is tied to a specific calendar day, not just a
-// weekday that recurs every week.
-const kyivDateFormatter = new Intl.DateTimeFormat('en-CA', {
-  timeZone: TIMEZONE,
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-});
-
-function getKyivNow(): { weekday: number; time: string; date: string } {
-  const now = new Date();
-  const parts = kyivFormatter.formatToParts(now);
-  const weekdayName = parts.find((p) => p.type === 'weekday')!.value;
-  const hour = parts.find((p) => p.type === 'hour')!.value;
-  const minute = parts.find((p) => p.type === 'minute')!.value;
-
-  return { weekday: WEEKDAY_INDEX[weekdayName], time: `${hour}:${minute}`, date: kyivDateFormatter.format(now) };
-}
+// Rotated so the same weekly message doesn't read as identically robotic every time.
+const REMINDER_EMOJI = ['🍽', '🍕', '🥗', '🍜'] as const;
 
 export function startScheduler(bot: Telegraf): void {
   cron.schedule('* * * * *', () => {
@@ -78,7 +52,7 @@ export function startScheduler(bot: Telegraf): void {
           sendToChat(
             bot.telegram,
             chatId,
-            '🍽 ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇',
+            `${pickRandomEmoji(REMINDER_EMOJI)} ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇`,
             buildGroupMenu(bot.botInfo!.username, chatId),
             DAY_MS,
           );
@@ -101,11 +75,7 @@ export function startScheduler(bot: Telegraf): void {
           // 'draw' done for today) until the following week's draw. Unlocking is local, durable state;
           // the announcement is best-effort UI feedback and can safely fail independently.
           resetWeek(chatId);
-          const text = winner
-            ? `🎉 ДеЖеремо цього тижня: ${winner.place}!\n(дякуємо ${winner.username} за ідею)`
-            : '😴 Цього тижня всі мовчали... наступного разу точно хтось запропонує щось смачне!';
-
-          sendToChat(bot.telegram, chatId, text);
+          sendToChat(bot.telegram, chatId, buildDrawAnnouncement(winner), { parse_mode: 'HTML' });
         }
       }
     }

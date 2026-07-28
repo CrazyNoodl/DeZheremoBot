@@ -80,6 +80,13 @@ export function lockSubmissions(chatId: number): void {
   lock(chatId);
 }
 
+// Unlocks without touching submissions — distinct from resetWeek, which is for starting a fresh
+// week. This is for an admin extending/reopening the current week's window after it's already
+// locked (by schedule or by a prior manual lock), without losing what's already been submitted.
+export function reopenSubmissions(chatId: number): void {
+  unlock(chatId);
+}
+
 export function isGroupPaused(chatId: number): boolean {
   return isPaused(chatId);
 }
