@@ -7,7 +7,7 @@ import { getMenuMessage } from '../storage/menuMessages.js';
 
 export { SUBMIT_ACTION };
 
-const PAUSED_MESSAGE = '⏸ Цикл цього тижня призупинено адміном — заявки тимчасово не приймаються';
+const PAUSED_MESSAGE = '⏸ Цього тижня ДеЖеремо на паузі — заявки поки не приймаються. Скоро повернемось!';
 
 // A callback query can go stale (double-tap, a menu card edited/replaced since the tap) between
 // the button press and this running — Telegram then rejects answerCbQuery with a 400. This exact
@@ -26,7 +26,7 @@ export async function showPersonalMenu(ctx: Context, groupChatId: number): Promi
   if (!userId) return;
 
   if (!(await isChatMember(ctx, groupChatId, userId))) {
-    await ctx.reply('🔒 Ти не учасник цієї групи.');
+    await ctx.reply('🔒 Здається, ти не в цій групі.');
     return;
   }
 
@@ -40,7 +40,7 @@ export async function showPersonalMenu(ctx: Context, groupChatId: number): Promi
   if (isSubmissionLocked(groupChatId)) {
     // Edits/reuses a stale tracked card if one exists, same as every other state change in this
     // private chat, instead of always creating a fresh message.
-    await updateMenuMessage(ctx, groupChatId, userId, '🔒 Прийом заявок закритий на цьому тижні');
+    await updateMenuMessage(ctx, groupChatId, userId, '🔒 Заявки на цей тиждень уже закрито');
     return;
   }
 
@@ -60,7 +60,7 @@ export async function handleSubmitAction(ctx: Context): Promise<void> {
   // user's membership if they left the group after opening it (same reasoning as schedule.ts's
   // double admin-check).
   if (!(await isChatMember(ctx, groupChatId, userId))) {
-    await ctx.reply('🔒 Ти більше не учасник цієї групи.');
+    await ctx.reply('🔒 Здається, ти вже не в цій групі.');
     return;
   }
 
@@ -70,7 +70,7 @@ export async function handleSubmitAction(ctx: Context): Promise<void> {
   }
 
   if (isSubmissionLocked(groupChatId)) {
-    await updateMenuMessage(ctx, groupChatId, userId, '🔒 Прийом заявок закритий на цьому тижні');
+    await updateMenuMessage(ctx, groupChatId, userId, '🔒 Заявки на цей тиждень уже закрито');
     return;
   }
 

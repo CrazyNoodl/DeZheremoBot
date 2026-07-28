@@ -10,9 +10,23 @@ export const MAX_PLACE_LENGTH = 100;
 // duplicate resubmits of the same place never reach this check, since they're rejected first.
 const RATE_LIMIT_MS = 10_000;
 
+// Only links from these sources are accepted for now (menu/location/profile links, not free-text
+// place names) — each entry matches one provider's share-link shape as seen in the wild:
+// https://expz.menu/d0838ea9-b9ae-44dd-b99d-993f0a0206fd, https://maps.app.goo.gl/uKwFMyv1DMrUtZua8,
+// https://www.instagram.com/milkbarkyiv.
+const PLACE_LINK_PATTERNS: RegExp[] = [
+  /^https:\/\/expz\.menu\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/?$/i,
+  /^https:\/\/maps\.app\.goo\.gl\/[A-Za-z0-9_-]+\/?$/,
+  /^https:\/\/(www\.)?instagram\.com\/[A-Za-z0-9._]+\/?$/,
+];
+
+export function isValidPlaceLink(place: string): boolean {
+  return PLACE_LINK_PATTERNS.some((pattern) => pattern.test(place));
+}
+
 export type SubmitResult =
   | { ok: true; previousPlace?: string }
-  | { ok: false; reason: 'locked' | 'paused' | 'duplicate' | 'too_long' | 'rate_limited' };
+  | { ok: false; reason: 'locked' | 'paused' | 'duplicate' | 'too_long' | 'invalid_format' | 'rate_limited' };
 
 export function submitPlace(chatId: number, userId: number, username: string, place: string): SubmitResult {
   // Checked ahead of the lock check: pause and lock are independent flags (a paused chat is not
@@ -28,6 +42,10 @@ export function submitPlace(chatId: number, userId: number, username: string, pl
 
   if (place.length > MAX_PLACE_LENGTH) {
     return { ok: false, reason: 'too_long' };
+  }
+
+  if (!isValidPlaceLink(place)) {
+    return { ok: false, reason: 'invalid_format' };
   }
 
   const previousPlace = getSubmission(chatId, userId)?.place;

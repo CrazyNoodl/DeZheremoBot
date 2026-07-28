@@ -26,7 +26,7 @@ test('showSubmissionsList refuses a non-member', async () => {
   await showSubmissionsList(ctx, -11001);
 
   assert.equal(replies.length, 1);
-  assert.match(replies[0], /не учасник/);
+  assert.match(replies[0], /не в цій групі/);
 });
 
 test('showSubmissionsList refuses when the membership lookup fails', async () => {
@@ -35,7 +35,7 @@ test('showSubmissionsList refuses when the membership lookup fails', async () =>
   await showSubmissionsList(ctx, -11002);
 
   assert.equal(replies.length, 1);
-  assert.match(replies[0], /не учасник/);
+  assert.match(replies[0], /не в цій групі/);
 });
 
 test('showSubmissionsList replies with the list for an actual member', async () => {
@@ -44,5 +44,5 @@ test('showSubmissionsList replies with the list for an actual member', async () 
   await showSubmissionsList(ctx, -11003);
 
   assert.equal(replies.length, 1);
-  assert.doesNotMatch(replies[0], /не учасник/);
+  assert.doesNotMatch(replies[0], /не в цій групі/);
 });

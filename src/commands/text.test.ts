@@ -43,7 +43,7 @@ test('a locked chat rejects the submission and clears the awaiting state', async
   const chatId = -12002;
   lockSubmissions(chatId);
   markAwaitingSubmission(userId, chatId);
-  const { ctx, replies, deletions } = fakeCtx(userId, 'Дежерьома');
+  const { ctx, replies, deletions } = fakeCtx(userId, 'https://www.instagram.com/dezheroma');
 
   await handleTextMessage(ctx);
 
@@ -57,24 +57,37 @@ test('a paused chat rejects the submission and clears the awaiting state', async
   const chatId = -12004;
   pauseGroup(chatId);
   markAwaitingSubmission(userId, chatId);
-  const { ctx, replies, deletions } = fakeCtx(userId, 'Дежерьома');
+  const { ctx, replies, deletions } = fakeCtx(userId, 'https://www.instagram.com/dezheroma');
 
   await handleTextMessage(ctx);
 
   assert.equal(getAwaitingChatId(userId), undefined);
   assert.equal(deletions.length, 1);
-  assert.match(replies[0], /призупинено/);
+  assert.match(replies[0], /на паузі/);
 });
 
 test('a successful submission clears the awaiting state and confirms', async () => {
   const userId = 13003;
   const chatId = -12003;
   markAwaitingSubmission(userId, chatId);
-  const { ctx, replies, deletions } = fakeCtx(userId, 'Дежерьома');
+  const { ctx, replies, deletions } = fakeCtx(userId, 'https://www.instagram.com/dezheroma');
 
   await handleTextMessage(ctx);
 
   assert.equal(getAwaitingChatId(userId), undefined);
   assert.equal(deletions.length, 1);
   assert.match(replies[0], /Додано/);
+});
+
+test('a non-link place is rejected and keeps the user awaiting so they can retype', async () => {
+  const userId = 13005;
+  const chatId = -12005;
+  markAwaitingSubmission(userId, chatId);
+  const { ctx, replies, deletions } = fakeCtx(userId, 'Дежерьома');
+
+  await handleTextMessage(ctx);
+
+  assert.equal(getAwaitingChatId(userId), chatId);
+  assert.equal(deletions.length, 1);
+  assert.match(replies[0], /посилання/);
 });

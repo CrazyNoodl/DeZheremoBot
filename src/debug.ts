@@ -18,7 +18,7 @@ async function sendReminderToChat(bot: Telegraf, chatId: number): Promise<void> 
   await sendToChat(
     bot.telegram,
     chatId,
-    '🍽 Час обрати місце на цей тиждень! Хто ще не додав — тисни кнопку 👇',
+    '🍽 Час вирішувати, де ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇',
     buildGroupMenu(bot.botInfo!.username, chatId),
   );
 }
@@ -28,8 +28,8 @@ async function sendReminderToChat(bot: Telegraf, chatId: number): Promise<void> 
 async function runDrawForChat(bot: Telegraf, chatId: number): Promise<string> {
   const winner = pickWeeklyWinner(chatId);
   const text = winner
-    ? `🎉 Обрано: ${winner.place}\n(варіант від ${winner.username})`
-    : '🤷 Цього тижня ніхто нічого не додав.';
+    ? `🎉 ДеЖеремо цього тижня: ${winner.place}!\n(дякуємо ${winner.username} за ідею)`
+    : '😴 Цього тижня всі мовчали... наступного разу точно хтось запропонує щось смачне!';
   // Same reasoning as scheduler.ts's draw branch: reset before the network send, not after, so a
   // failure/crash during the send never leaves the chat stuck locked.
   resetWeek(chatId);

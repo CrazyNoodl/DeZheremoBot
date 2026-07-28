@@ -72,7 +72,7 @@ export function startScheduler(bot: Telegraf): void {
           sendToChat(
             bot.telegram,
             chatId,
-            '🍽 ДеЖеремо на цьому тижні! Хто ще не додав — тисни кнопку 👇',
+            '🍽 Час вирішувати, де ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇',
             buildGroupMenu(bot.botInfo!.username, chatId),
             DAY_MS,
           );
@@ -96,8 +96,8 @@ export function startScheduler(bot: Telegraf): void {
           // the announcement is best-effort UI feedback and can safely fail independently.
           resetWeek(chatId);
           const text = winner
-            ? `🎉 Обрано: ${winner.place}\n(варіант від ${winner.username})`
-            : '🤷 Цього тижня ніхто нічого не додав.';
+            ? `🎉 ДеЖеремо цього тижня: ${winner.place}!\n(дякуємо ${winner.username} за ідею)`
+            : '😴 Цього тижня всі мовчали... наступного разу точно хтось запропонує щось смачне!';
 
           sendToChat(bot.telegram, chatId, text);
         }

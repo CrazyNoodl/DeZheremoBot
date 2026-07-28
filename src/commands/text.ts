@@ -2,6 +2,7 @@ import type { Context } from 'telegraf';
 import { clearAwaitingSubmission, getAwaitingChatId } from '../storage/pendingState.js';
 import { MAX_PLACE_LENGTH, submitPlace } from '../services/submissionService.js';
 import { sendToChat } from '../telegramBroadcast.js';
+import { PLACE_LINK_FORMAT_HINT } from './add.js';
 import { buildMenuKeyboard, buildMenuText, updateMenuMessage } from './menuMessage.js';
 import { handleScheduleTextStep } from './schedule.js';
 
@@ -28,10 +29,12 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
   if (!result.ok) {
     // Invalid input, not a terminal outcome — leave the user "awaiting" so they can just
     // retype without pressing the button again.
-    if (result.reason === 'too_long' || result.reason === 'rate_limited') {
+    if (result.reason === 'too_long' || result.reason === 'rate_limited' || result.reason === 'invalid_format') {
       const text = result.reason === 'too_long'
-        ? `⚠️ Задовга назва (максимум ${MAX_PLACE_LENGTH} символів) — спробуй коротше.`
-        : '⏳ Зачекай трохи перед наступною зміною.';
+        ? `✂️ Ого, це ціла історія! Стисни до ${MAX_PLACE_LENGTH} символів — і все вийде.`
+        : result.reason === 'invalid_format'
+          ? PLACE_LINK_FORMAT_HINT
+          : '⏳ Не поспішай так — ще трохи і зможеш змінити знову.';
       await updateMenuMessage(ctx, chatId, userId, text);
       await ctx.deleteMessage();
       return;
@@ -40,10 +43,10 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     clearAwaitingSubmission(userId);
     const text =
       result.reason === 'locked'
-        ? '🔒 Запізно — прийом заявок на цьому тижні вже закритий.'
+        ? '🔒 Запізно — заявки на цей тиждень уже закрито. До зустрічі наступного тижня!'
         : result.reason === 'paused'
-          ? '⏸ Цикл цього тижня призупинено адміном — заявки тимчасово не приймаються.'
-          : `Це вже твій поточний варіант — нічого не змінилось 🤷\n\n${buildMenuText(chatId, userId)}`;
+          ? '⏸ Цього тижня ДеЖеремо на паузі — заявки поки не приймаються. Скоро повернемось!'
+          : `Це вже твій поточний варіант — міняти нічого 😉\n\n${buildMenuText(chatId, userId)}`;
     const keyboard = result.reason === 'locked' || result.reason === 'paused' ? undefined : buildMenuKeyboard(chatId, userId);
     await updateMenuMessage(ctx, chatId, userId, text, keyboard);
     await ctx.deleteMessage();
@@ -54,8 +57,8 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
 
   const previousPlace = result.previousPlace;
   const confirmation = previousPlace !== undefined
-    ? `Замінено: ${previousPlace} → ${place} ✅`
-    : `Додано: ${place} ✅`;
+    ? `Готово! Змінено на: ${place} (було: ${previousPlace}) 👍`
+    : `Готово! Додано: ${place} 🎉`;
 
   await updateMenuMessage(
     ctx,
@@ -68,8 +71,8 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     ctx.telegram,
     chatId,
     previousPlace !== undefined
-      ? `🍽 ${username} змінює варіант: ${previousPlace} → ${place}`
-      : `🍽 ${username} пропонує: ${place}`,
+      ? `🔄 ${username} оновлює варіант: ${previousPlace} → ${place}`
+      : `🍽 ${username} пропонує варіант: ${place}`,
   );
   await ctx.deleteMessage();
 }

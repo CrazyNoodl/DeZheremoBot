@@ -36,7 +36,7 @@ test('showPersonalMenu refuses a non-member', async () => {
   await showPersonalMenu(ctx, -10001);
 
   assert.equal(replies.length, 1);
-  assert.match(replies[0], /не учасник/);
+  assert.match(replies[0], /не в цій групі/);
 });
 
 test('showPersonalMenu shows the menu to an actual member', async () => {
@@ -45,7 +45,7 @@ test('showPersonalMenu shows the menu to an actual member', async () => {
   await showPersonalMenu(ctx, -10002);
 
   assert.equal(replies.length, 1);
-  assert.doesNotMatch(replies[0], /не учасник/);
+  assert.doesNotMatch(replies[0], /не в цій групі/);
 });
 
 test('handleSubmitAction refuses a user who left the group since opening the menu', async () => {
@@ -56,7 +56,7 @@ test('handleSubmitAction refuses a user who left the group since opening the men
   await handleSubmitAction(ctx);
 
   assert.equal(replies.length, 1);
-  assert.match(replies[0], /не учасник/);
+  assert.match(replies[0], /не в цій групі/);
 });
 
 test('handleSubmitAction lets a current member proceed past the membership gate', async () => {
@@ -66,7 +66,7 @@ test('handleSubmitAction lets a current member proceed past the membership gate'
 
   await handleSubmitAction(ctx);
 
-  assert.equal(replies.some((r) => /не учасник/.test(r)), false);
+  assert.equal(replies.some((r) => /не в цій групі/.test(r)), false);
 });
 
 test('showPersonalMenu shows a distinct message for a paused group instead of the personal menu', async () => {
@@ -77,7 +77,7 @@ test('showPersonalMenu shows a distinct message for a paused group instead of th
   await showPersonalMenu(ctx, groupChatId);
 
   assert.equal(replies.length, 1);
-  assert.match(replies[0], /призупинено/);
+  assert.match(replies[0], /на паузі/);
 });
 
 test('handleSubmitAction refuses to prompt for a place in a paused group', async () => {
@@ -90,7 +90,7 @@ test('handleSubmitAction refuses to prompt for a place in a paused group', async
   await handleSubmitAction(ctx);
 
   assert.equal(replies.length, 1);
-  assert.match(replies[0], /призупинено/);
+  assert.match(replies[0], /на паузі/);
 });
 
 test('handleSubmitAction still prompts for a place when answerCbQuery rejects (stale/double-tapped callback query)', async () => {
@@ -100,5 +100,5 @@ test('handleSubmitAction still prompts for a place when answerCbQuery rejects (s
 
   await handleSubmitAction(ctx);
 
-  assert.equal(replies.some((r) => /Напиши назву місця/.test(r)), true);
+  assert.equal(replies.some((r) => /Надішли посилання на заклад/.test(r)), true);
 });

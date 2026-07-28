@@ -19,8 +19,8 @@ export function withGroupLabel(groupChatId: number, text: string): string {
 export function buildMenuText(groupChatId: number, userId: number): string {
   const submission = getUserSubmission(groupChatId, userId);
   return submission
-    ? `Твій поточний варіант: ${submission.place}\n\nТисни кнопку нижче, щоб змінити 👇`
-    : 'У тебе ще немає пропозиції на цей тиждень. Тисни кнопку нижче, щоб додати 👇';
+    ? `📍 Твій варіант цього тижня: ${submission.place}\n\nХочеш змінити — тисни кнопку нижче 👇`
+    : '🤔 Ще нема варіанту на цей тиждень? Додай посилання на заклад — тисни кнопку нижче 👇';
 }
 
 export function buildMenuKeyboard(groupChatId: number, userId: number) {

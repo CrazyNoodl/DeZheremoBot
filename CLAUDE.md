@@ -16,8 +16,10 @@ to SQLite (`data/state.db`) instead of living only in process memory, so a crash
 no longer silently loses that week's data or un-locks a chat that had already closed — verified with a
 manual restart-simulation script, not yet exercised against a real crash mid-cycle. Access to another
 group's submit/list flow now requires actual membership in that group (`commands/access.ts`), places
-are capped at 100 characters, and repeated changes are rate-limited (10s per user per chat) to keep
-one user from flooding the group chat. The scheduler's reminder/lock/draw checks are `>=` with a
+are capped at 100 characters, must be a link from one of a small allow-list of providers
+(`isValidPlaceLink` in `services/submissionService.ts` — see "Submission + public announcement"
+below), and repeated changes are rate-limited (10s per user per chat) to keep one user from flooding
+the group chat. The scheduler's reminder/lock/draw checks are `>=` with a
 persisted "already fired today" guard (`storage/firedEvents.ts`) instead of an exact-minute `===`, so
 a stalled event loop or a process that was down at the exact scheduled minute still catches up on the
 next tick rather than silently skipping that day's action. `storage/jsonFile.ts` makes
@@ -58,8 +60,8 @@ separately from the rest of `src/` — `npm run build`'s `tsc` covers them too (
 Coverage is `services/` and `storage/` (the business logic and persistence, the cheapest to test in
 isolation) plus a handful of `commands/` handlers where a recent bug was security-relevant enough to
 be worth a regression test directly at that layer: the `isChatMember` membership gate on
-`showPersonalMenu`/`handleSubmitAction`/`showSubmissionsList`, `text.ts`'s too-long/rate-limited
-handling, and — following the same reasoning — `schedule.ts`'s per-action admin re-verification, now
+`showPersonalMenu`/`handleSubmitAction`/`showSubmissionsList`, `text.ts`'s too-long/invalid-format/
+rate-limited handling, and — following the same reasoning — `schedule.ts`'s per-action admin re-verification, now
 also exercised for the `pause`/`resume` actions added alongside the rest (`sched:pause`/`sched:reset`
 independence is asserted directly: resetting a schedule to default must not silently un-pause the
 group). Full `commands/` coverage was deliberately not attempted — a Telegraf `Context` is large,
@@ -440,22 +442,33 @@ submission for *that group* (if any) so `text.ts` can tell a fresh submission fr
 also rejects a resubmission that's an exact string match (`===`, no trim/case-fold beyond the `.trim()`
 already applied in `text.ts`) of the user's current place in that group — a deliberately minimal check
 against just their own submission, not a cross-user duplicate check against everyone else's. It also
-enforces `MAX_PLACE_LENGTH` (100 characters) before anything else, and, past the duplicate check, a
-10-second `RATE_LIMIT_MS` cooldown per `(chatId, userId)` (`storage/rateLimit.ts`, a `Map<"chatId:userId",
+enforces `MAX_PLACE_LENGTH` (100 characters) before anything else, then — before the duplicate check —
+that the place is a recognized link (`isValidPlaceLink`, `reason: 'invalid_format'` otherwise): a
+free-text place name is no longer accepted at all, only a link matching one of three hardcoded
+provider patterns (`expz.menu/<uuid>`, `maps.app.goo.gl/<code>`, `instagram.com/<username>`, each a
+regex in `PLACE_LINK_PATTERNS`) — a deliberately small, hardcoded allow-list ("поки тільки такі"),
+not a generic URL check, since a bare "is this a URL" test would let through links to sites with no
+reliable way to show the place. Extending it to another provider (e.g. Google Maps' plain `maps.app.goo.gl`
+alternative, or a future in-house menu site) means adding one more pattern to that array. Past the
+duplicate check, `submitPlace` also enforces a 10-second `RATE_LIMIT_MS` cooldown per `(chatId, userId)` (`storage/rateLimit.ts`, a `Map<"chatId:userId",
 lastSubmitAtMs>`) — the rate limit sits *after* the duplicate check deliberately, so double-tapping the
 same value never trips it, only rapid genuine changes do, since each of those broadcasts a fresh message
 into the group chat. That map prunes entries older than an hour on every write (`recordSubmitTime`) —
 well past `RATE_LIMIT_MS` itself, just bounding growth — since without it the map would hold one entry
-per `(chatId, userId)` pair that ever submitted, for the lifetime of the process. `text.ts` treats `too_long`/`rate_limited` as retryable:
+per `(chatId, userId)` pair that ever submitted, for the lifetime of the process. `text.ts` treats `too_long`/`invalid_format`/`rate_limited` as retryable:
 unlike `locked`/`duplicate`, it does not clear the user's "awaiting" state, so they can just retype
-instead of pressing "✏️ Змінити" again. On success
+instead of pressing "✏️ Змінити" again — an `invalid_format` retry gets `PLACE_LINK_FORMAT_HINT`
+(`commands/add.ts`, a message spelling out the three accepted formats with an example link each), the
+same text `promptForPlace` shows up front when first asking for a place, so the "what am I supposed to
+paste here" wording is identical whether the user's seeing it for the first time or after a rejected
+attempt. On success
 it sends (via `sendToChat`, to that one group only — not `broadcast()`, since a submission is scoped to
 the group it was made for) `🍽 <username> пропонує: <place>` — or, if this overwrote a *different*
 previous place, `🍽 <username> змінює варіант: <previous> → <place>` instead (private confirmation
 mirrors this: `Додано: <place> ✅` vs `Замінено: <previous> → <place> ✅` — edited into the same menu
 message per above). `ctx.deleteMessage()` on the user's own plain-text reply runs on every outcome —
-success, locked, duplicate, too-long, and rate-limited alike — so it never lingers next to the card it
-was submitted into. Ukrainian past-tense verbs conjugate by
+success, locked, duplicate, too-long, invalid-format, and rate-limited alike — so it never lingers next
+to the card it was submitted into. Ukrainian past-tense verbs conjugate by
 gender (`обрав`/`обрала`) and the bot doesn't know anyone's gender — all announcement/menu text uses
 present-tense or impersonal phrasing to avoid needing gender agreement.
 

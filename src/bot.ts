@@ -26,7 +26,7 @@ bot.start(async (ctx) => {
       const chatId = Number(ctx.startPayload.slice(START_LIST_PREFIX.length));
       await showSubmissionsList(ctx, chatId);
     } else {
-      await ctx.reply('Привіт! Тисни "➕ Додати" в груповому чаті — я попрошу назву місця тут, у приватці.');
+      await ctx.reply('👋 Привіт! Я ДеЖеремоБот — допомагаю компанії визначитись, куди піти їсти. Тисни "➕ Додати" в груповому чаті, а я тут, у приватці, спитаю деталі.');
     }
     return;
   }
