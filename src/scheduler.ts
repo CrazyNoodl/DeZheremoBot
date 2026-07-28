@@ -1,7 +1,13 @@
 import cron from 'node-cron';
 import type { Telegraf } from 'telegraf';
 import { buildGroupMenu } from './commands/keyboard.js';
-import { isGroupPaused, lockSubmissions, pickWeeklyWinner, recordDraw, resetWeek } from './services/submissionService.js';
+import {
+  isGroupPaused,
+  lockSubmissions,
+  pickWeeklyWinner,
+  recordDraw,
+  resetWeek,
+} from './services/submissionService.js';
 import { hasFiredToday, markFired } from './storage/firedEvents.js';
 import { listGroupChats } from './storage/groupChats.js';
 import { getGroupSchedule } from './storage/groupSchedules.js';
@@ -72,7 +78,7 @@ export function startScheduler(bot: Telegraf): void {
           sendToChat(
             bot.telegram,
             chatId,
-            '🍽 Час вирішувати, де ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇',
+            '🍽 ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇',
             buildGroupMenu(bot.botInfo!.username, chatId),
             DAY_MS,
           );
