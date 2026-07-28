@@ -1,6 +1,6 @@
 # app name must be globally unique on Fly — `fly launch` will prompt you to change this
 app = "dezheremobot"
-primary_region = "waw"
+primary_region = "fra"
 
 [build]
 
