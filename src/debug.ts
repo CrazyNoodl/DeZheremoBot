@@ -1,7 +1,6 @@
-import http from 'node:http';
 import { Markup, type Context, type Telegraf } from 'telegraf';
 import { buildGroupMenu } from './commands/keyboard.js';
-import { lockSubmissions, pickWeeklyWinner, resetWeek, submitPlace } from './services/submissionService.js';
+import { lockSubmissions, pickWeeklyWinner, resetWeek } from './services/submissionService.js';
 import { getGroupChatTitle, listGroupChats } from './storage/groupChats.js';
 import { sendToChat } from './telegramBroadcast.js';
 
@@ -147,44 +146,4 @@ export function registerDebugCommands(bot: Telegraf): void {
   bot.command('testdraw', (ctx) => handleDebugCommand(ctx, bot, 'draw'));
   bot.command('testreset', (ctx) => handleDebugCommand(ctx, bot, 'reset'));
   bot.action(/^debug:/, (ctx) => handleDebugAction(ctx, bot));
-}
-
-// TEMP: local-only HTTP hooks so the same in-process state can be triggered
-// without going through Telegram. Never exposed beyond 127.0.0.1.
-export function startDebugServer(bot: Telegraf): void {
-  const server = http.createServer(async (req, res) => {
-    const route = req.url?.split('?')[0];
-    try {
-      if (route === '/reminder') {
-        for (const chatId of listGroupChats()) await sendReminderToChat(bot, chatId);
-        res.end('sent reminder');
-      } else if (route === '/lock') {
-        for (const chatId of listGroupChats()) lockSubmissions(chatId);
-        res.end('locked');
-      } else if (route === '/draw') {
-        let lastText = '';
-        for (const chatId of listGroupChats()) lastText = await runDrawForChat(bot, chatId);
-        res.end(lastText);
-      } else if (route === '/reset') {
-        for (const chatId of listGroupChats()) resetWeek(chatId);
-        res.end('reset');
-      } else if (route === '/submit') {
-        const params = new URLSearchParams(req.url?.split('?')[1] ?? '');
-        const chatId = Number(params.get('chatId'));
-        const userId = Number(params.get('userId'));
-        const username = params.get('username') ?? 'testuser';
-        const place = params.get('place') ?? '';
-        const result = submitPlace(chatId, userId, username, place);
-        res.end(JSON.stringify(result));
-      } else {
-        res.statusCode = 404;
-        res.end('not found');
-      }
-    } catch (err) {
-      res.statusCode = 500;
-      res.end(String(err));
-    }
-  });
-
-  server.listen(4321, '127.0.0.1');
 }

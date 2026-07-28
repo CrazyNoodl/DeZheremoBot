@@ -6,7 +6,7 @@ import { showSubmissionsList } from './commands/list.js';
 import { handleSubmitAction, showPersonalMenu, SUBMIT_ACTION } from './commands/menu.js';
 import { handleScheduleAction, handleScheduleCommand } from './commands/schedule.js';
 import { handleTextMessage } from './commands/text.js';
-import { registerDebugCommands, startDebugServer } from './debug.js';
+import { registerDebugCommands } from './debug.js';
 import { startScheduler } from './scheduler.js';
 import { addGroupChat } from './storage/groupChats.js';
 
@@ -45,7 +45,6 @@ bot.on('text', handleTextMessage);
 
 bot.launch(() => {
   startScheduler(bot);
-  startDebugServer(bot); // TEMP: for manual testing, remove before real use
 });
 
 // Safety net: without this, an error thrown by any command/action handler had nowhere to surface —
