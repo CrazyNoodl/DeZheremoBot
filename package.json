@@ -1,0 +1,25 @@
+{
+  "name": "dezheremobot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/bot.ts",
+    "build": "tsc",
+    "start": "node dist/bot.js",
+    "test": "DEZHEREMO_STATE_DB=:memory: DEZHEREMO_HISTORY_DB=:memory: tsx --test --test-force-exit 'src/**/*.test.ts'"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "node-cron": "^4.6.0",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.4"
+  }
+}

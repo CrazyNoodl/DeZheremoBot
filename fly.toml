@@ -1,0 +1,13 @@
+# app name must be globally unique on Fly — `fly launch` will prompt you to change this
+app = "dezheremobot"
+primary_region = "waw"
+
+[build]
+
+[[mounts]]
+  source = "dezheremobot_data"
+  destination = "/app/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
