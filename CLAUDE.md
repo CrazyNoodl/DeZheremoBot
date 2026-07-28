@@ -16,7 +16,7 @@ to SQLite (`data/state.db`) instead of living only in process memory, so a crash
 no longer silently loses that week's data or un-locks a chat that had already closed — verified with a
 manual restart-simulation script, not yet exercised against a real crash mid-cycle. Access to another
 group's submit/list flow now requires actual membership in that group (`commands/access.ts`), places
-are capped at 100 characters, must be a link from one of a small allow-list of providers
+are capped at 200 characters, must be a link from one of a small allow-list of providers
 (`isValidPlaceLink` in `services/submissionService.ts` — see "Submission + public announcement"
 below), and repeated changes are rate-limited (10s per user per chat) to keep one user from flooding
 the group chat. The scheduler's reminder/lock/draw checks are `>=` with a
@@ -442,7 +442,7 @@ submission for *that group* (if any) so `text.ts` can tell a fresh submission fr
 also rejects a resubmission that's an exact string match (`===`, no trim/case-fold beyond the `.trim()`
 already applied in `text.ts`) of the user's current place in that group — a deliberately minimal check
 against just their own submission, not a cross-user duplicate check against everyone else's. It also
-enforces `MAX_PLACE_LENGTH` (100 characters) before anything else, then — before the duplicate check —
+enforces `MAX_PLACE_LENGTH` (200 characters) before anything else, then — before the duplicate check —
 that the place is a recognized link (`isValidPlaceLink`, `reason: 'invalid_format'` otherwise): a
 free-text place name is no longer accepted at all, only a link matching one of three hardcoded
 provider patterns (`expz.menu/<uuid>`, `maps.app.goo.gl/<code>`, `instagram.com/<username>`, each a

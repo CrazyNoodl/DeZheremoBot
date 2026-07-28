@@ -60,6 +60,12 @@ test('isValidPlaceLink accepts expz.menu, maps.app.goo.gl, and instagram.com lin
   assert.equal(isValidPlaceLink('https://instagram.com/milkbarkyiv'), true);
 });
 
+test('isValidPlaceLink accepts links with a trailing query string', () => {
+  assert.equal(isValidPlaceLink('https://www.instagram.com/franyk.kyiv?igsh=bnhrNzNwenp1ajl0'), true);
+  assert.equal(isValidPlaceLink('https://maps.app.goo.gl/uKwFMyv1DMrUtZua8?g_st=ic'), true);
+  assert.equal(isValidPlaceLink('https://expz.menu/d0838ea9-b9ae-44dd-b99d-993f0a0206fd?ref=share'), true);
+});
+
 test('isValidPlaceLink rejects plain text and unsupported domains', () => {
   assert.equal(isValidPlaceLink('Дежерьома'), false);
   assert.equal(isValidPlaceLink('https://example.com/somewhere'), false);

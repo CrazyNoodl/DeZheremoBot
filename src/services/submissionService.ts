@@ -4,7 +4,7 @@ import { isPaused, pause, resume } from '../storage/pauseState.js';
 import { msSinceLastSubmit, recordSubmitTime } from '../storage/rateLimit.js';
 import { addSubmission, clearSubmissions, getSubmission, listSubmissions, type Submission } from '../storage/store.js';
 
-export const MAX_PLACE_LENGTH = 100;
+export const MAX_PLACE_LENGTH = 200;
 
 // Guards against one user flooding the group chat with rapid "змінює варіант" announcements —
 // duplicate resubmits of the same place never reach this check, since they're rejected first.
@@ -13,11 +13,13 @@ const RATE_LIMIT_MS = 10_000;
 // Only links from these sources are accepted for now (menu/location/profile links, not free-text
 // place names) — each entry matches one provider's share-link shape as seen in the wild:
 // https://expz.menu/d0838ea9-b9ae-44dd-b99d-993f0a0206fd, https://maps.app.goo.gl/uKwFMyv1DMrUtZua8,
-// https://www.instagram.com/milkbarkyiv.
+// https://www.instagram.com/milkbarkyiv. The trailing `(\?.*)?` on each tolerates a query string —
+// e.g. Instagram's own "Share" button appends `?igsh=...` tracking params, which would otherwise
+// fail a pattern anchored at the end of the path.
 const PLACE_LINK_PATTERNS: RegExp[] = [
-  /^https:\/\/expz\.menu\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/?$/i,
-  /^https:\/\/maps\.app\.goo\.gl\/[A-Za-z0-9_-]+\/?$/,
-  /^https:\/\/(www\.)?instagram\.com\/[A-Za-z0-9._]+\/?$/,
+  /^https:\/\/expz\.menu\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/?(\?.*)?$/i,
+  /^https:\/\/maps\.app\.goo\.gl\/[A-Za-z0-9_-]+\/?(\?.*)?$/,
+  /^https:\/\/(www\.)?instagram\.com\/[A-Za-z0-9._]+\/?(\?.*)?$/,
 ];
 
 export function isValidPlaceLink(place: string): boolean {

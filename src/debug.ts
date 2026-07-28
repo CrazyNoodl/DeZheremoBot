@@ -18,7 +18,7 @@ async function sendReminderToChat(bot: Telegraf, chatId: number): Promise<void> 
   await sendToChat(
     bot.telegram,
     chatId,
-    '🍽 Час вирішувати, де ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇',
+    '🍽 ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇',
     buildGroupMenu(bot.botInfo!.username, chatId),
   );
 }
