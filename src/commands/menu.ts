@@ -2,12 +2,13 @@ import type { Context } from 'telegraf';
 import { isChatMember } from './access.js';
 import { promptForPlace } from './add.js';
 import { buildMenuText, sendMenuMessage, SUBMIT_ACTION, updateMenuMessage } from './menuMessage.js';
-import { isGroupPaused, isSubmissionLocked } from '../services/submissionService.js';
+import { isGroupPaused, isSubmissionLocked, isUserBlocked } from '../services/submissionService.js';
 import { getMenuMessage } from '../storage/menuMessages.js';
 
 export { SUBMIT_ACTION };
 
 const PAUSED_MESSAGE = '⏸ Цього тижня ДеЖеремо на паузі — заявки поки не приймаються. Скоро повернемось!';
+const BLOCKED_MESSAGE = '🚫 Тебе заблокували в цій групі — додавати заявки більше не можна.';
 
 // A callback query can go stale (double-tap, a menu card edited/replaced since the tap) between
 // the button press and this running — Telegram then rejects answerCbQuery with a 400. This exact
@@ -27,6 +28,13 @@ export async function showPersonalMenu(ctx: Context, groupChatId: number): Promi
 
   if (!(await isChatMember(ctx, groupChatId, userId))) {
     await ctx.reply('🔒 Здається, ти не в цій групі.');
+    return;
+  }
+
+  // Checked ahead of pause/lock: a blocked user gets a distinct, permanent-sounding message
+  // rather than one implying they could submit again once the week reopens.
+  if (isUserBlocked(groupChatId, userId)) {
+    await updateMenuMessage(ctx, groupChatId, userId, BLOCKED_MESSAGE);
     return;
   }
 
@@ -61,6 +69,11 @@ export async function handleSubmitAction(ctx: Context): Promise<void> {
   // double admin-check).
   if (!(await isChatMember(ctx, groupChatId, userId))) {
     await ctx.reply('🔒 Здається, ти вже не в цій групі.');
+    return;
+  }
+
+  if (isUserBlocked(groupChatId, userId)) {
+    await updateMenuMessage(ctx, groupChatId, userId, BLOCKED_MESSAGE);
     return;
   }
 

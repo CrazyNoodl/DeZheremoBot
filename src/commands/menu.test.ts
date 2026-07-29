@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { handleSubmitAction, showPersonalMenu } from './menu.js';
-import { pauseGroup } from '../services/submissionService.js';
+import { blockUserFromGroup, pauseGroup } from '../services/submissionService.js';
 import { setMenuMessage } from '../storage/menuMessages.js';
 
 function fakeCtx(status: string, userId: number, opts: { answerCbQueryThrows?: boolean } = {}) {
@@ -91,6 +91,31 @@ test('handleSubmitAction refuses to prompt for a place in a paused group', async
 
   assert.equal(replies.length, 1);
   assert.match(replies[0], /на паузі/);
+});
+
+test('showPersonalMenu shows a distinct message for a blocked user instead of the personal menu', async () => {
+  const groupChatId = -10008;
+  const userId = 11008;
+  blockUserFromGroup(groupChatId, userId, 'tester', 999);
+  const { ctx, replies } = fakeCtx('member', userId);
+
+  await showPersonalMenu(ctx, groupChatId);
+
+  assert.equal(replies.length, 1);
+  assert.match(replies[0], /заблокували/);
+});
+
+test('handleSubmitAction refuses to prompt for a place for a blocked user', async () => {
+  const groupChatId = -10009;
+  const userId = 11009;
+  blockUserFromGroup(groupChatId, userId, 'tester', 999);
+  setMenuMessage(userId, 999, 59, groupChatId);
+  const { ctx, replies } = fakeCtx('member', userId);
+
+  await handleSubmitAction(ctx);
+
+  assert.equal(replies.length, 1);
+  assert.match(replies[0], /заблокували/);
 });
 
 test('handleSubmitAction still prompts for a place when answerCbQuery rejects (stale/double-tapped callback query)', async () => {

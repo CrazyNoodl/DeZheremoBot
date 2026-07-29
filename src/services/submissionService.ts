@@ -1,8 +1,16 @@
+import { blockUser, isBlocked, listBlockedUsers, unblockUser, type BlockedUser } from '../storage/blockedUsers.js';
 import { recordDraw as persistDraw } from '../storage/history.js';
 import { isLocked, lock, unlock } from '../storage/lockState.js';
 import { isPaused, pause, resume } from '../storage/pauseState.js';
 import { msSinceLastSubmit, recordSubmitTime } from '../storage/rateLimit.js';
-import { addSubmission, clearSubmissions, getSubmission, listSubmissions, type Submission } from '../storage/store.js';
+import {
+  addSubmission,
+  clearSubmissions,
+  getSubmission,
+  listSubmissions,
+  removeSubmission,
+  type Submission,
+} from '../storage/store.js';
 
 export const MAX_PLACE_LENGTH = 200;
 
@@ -28,9 +36,15 @@ export function isValidPlaceLink(place: string): boolean {
 
 export type SubmitResult =
   | { ok: true; previousPlace?: string }
-  | { ok: false; reason: 'locked' | 'paused' | 'duplicate' | 'too_long' | 'invalid_format' | 'rate_limited' };
+  | { ok: false; reason: 'locked' | 'paused' | 'blocked' | 'duplicate' | 'too_long' | 'invalid_format' | 'rate_limited' };
 
 export function submitPlace(chatId: number, userId: number, username: string, place: string): SubmitResult {
+  // Checked ahead of every other gate: a blocked user shouldn't get a pause/lock-specific
+  // message that implies they'd be allowed to submit once that state clears.
+  if (isBlocked(chatId, userId)) {
+    return { ok: false, reason: 'blocked' };
+  }
+
   // Checked ahead of the lock check: pause and lock are independent flags (a paused chat is not
   // automatically locked), so without its own check here submissions would go through as normal
   // while paused.
@@ -97,6 +111,25 @@ export function pauseGroup(chatId: number): void {
 
 export function resumeGroup(chatId: number): void {
   resume(chatId);
+}
+
+export function isUserBlocked(chatId: number, userId: number): boolean {
+  return isBlocked(chatId, userId);
+}
+
+// Drops the user's current-week submission along with blocking them — a blocked user shouldn't
+// keep a live entry in the draw pool just because they submitted before being blocked.
+export function blockUserFromGroup(chatId: number, userId: number, username: string | undefined, blockedBy: number): void {
+  blockUser(chatId, userId, username, blockedBy);
+  removeSubmission(chatId, userId);
+}
+
+export function unblockUserFromGroup(chatId: number, userId: number): void {
+  unblockUser(chatId, userId);
+}
+
+export function listBlockedUsersInGroup(chatId: number): BlockedUser[] {
+  return listBlockedUsers(chatId);
 }
 
 export function pickWeeklyWinner(chatId: number): Submission | undefined {

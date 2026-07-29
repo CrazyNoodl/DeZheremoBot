@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  blockUserFromGroup,
   getAllSubmissions,
   isGroupPaused,
   isSubmissionLocked,
+  isUserBlocked,
   isValidPlaceLink,
+  listBlockedUsersInGroup,
   lockSubmissions,
   MAX_PLACE_LENGTH,
   pauseGroup,
@@ -12,6 +15,7 @@ import {
   resetWeek,
   resumeGroup,
   submitPlace,
+  unblockUserFromGroup,
 } from './submissionService.js';
 
 const DEZHEROMA_LINK = 'https://www.instagram.com/dezheroma';
@@ -145,6 +149,41 @@ test('a paused chat is checked ahead of the lock check, but the lock is untouche
 
   assert.deepEqual(submitPlace(-9013, 1, 'artem', DEZHEROMA_LINK), { ok: false, reason: 'paused' });
   assert.equal(isSubmissionLocked(-9013), false);
+});
+
+test('a blocked user is rejected even though nothing else prevents them from submitting', () => {
+  blockUserFromGroup(-9015, 1, 'artem', 999);
+
+  const result = submitPlace(-9015, 1, 'artem', DEZHEROMA_LINK);
+
+  assert.deepEqual(result, { ok: false, reason: 'blocked' });
+  assert.equal(isUserBlocked(-9015, 1), true);
+});
+
+test('blockUserFromGroup drops the user\'s current-week submission', () => {
+  submitPlace(-9016, 1, 'artem', DEZHEROMA_LINK);
+
+  blockUserFromGroup(-9016, 1, 'artem', 999);
+
+  assert.equal(getAllSubmissions(-9016).length, 0);
+});
+
+test('unblockUserFromGroup reverses blockUserFromGroup', () => {
+  blockUserFromGroup(-9017, 1, 'artem', 999);
+  unblockUserFromGroup(-9017, 1);
+
+  const result = submitPlace(-9017, 1, 'artem', DEZHEROMA_LINK);
+
+  assert.equal(result.ok, true);
+});
+
+test('listBlockedUsersInGroup returns everyone blocked in that chat', () => {
+  blockUserFromGroup(-9018, 1, 'artem', 999);
+  blockUserFromGroup(-9018, 2, 'olya', 999);
+
+  const blocked = listBlockedUsersInGroup(-9018);
+
+  assert.equal(blocked.length, 2);
 });
 
 test('resetWeek clears submissions and unlocks the chat', () => {

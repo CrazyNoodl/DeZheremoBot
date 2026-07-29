@@ -25,6 +25,7 @@ const upsertStmt = db.prepare(`
 const listStmt = db.prepare(`SELECT user_id AS userId, username, place FROM submissions WHERE chat_id = ?`);
 const getStmt = db.prepare(`SELECT user_id AS userId, username, place FROM submissions WHERE chat_id = ? AND user_id = ?`);
 const clearStmt = db.prepare(`DELETE FROM submissions WHERE chat_id = ?`);
+const removeStmt = db.prepare(`DELETE FROM submissions WHERE chat_id = ? AND user_id = ?`);
 
 export function addSubmission(chatId: number, userId: number, username: string, place: string): void {
   upsertStmt.run(chatId, userId, username, place);
@@ -40,4 +41,8 @@ export function getSubmission(chatId: number, userId: number): Submission | unde
 
 export function clearSubmissions(chatId: number): void {
   clearStmt.run(chatId);
+}
+
+export function removeSubmission(chatId: number, userId: number): void {
+  removeStmt.run(chatId, userId);
 }
