@@ -13,6 +13,8 @@ const {
   getAllSubmissions,
   isGroupPaused,
   isSubmissionLocked,
+  isUserBlocked,
+  listBlockedUsersInGroup,
   lockSubmissions,
   submitPlace,
 } = await import('../services/submissionService.js');
@@ -172,4 +174,67 @@ test('handleAdminAction "clearweek" clears submissions and unlocks without drawi
   assert.equal(getAllSubmissions(chatId).length, 0);
   assert.equal(isSubmissionLocked(chatId), false);
   assert.equal(sentMessages.length, 0);
+});
+
+test('handleAdminAction refuses "block" for a user who is no longer an admin', async () => {
+  const userId = 30010;
+  const chatId = -30010;
+  const targetUserId = 1;
+  submitPlace(chatId, targetUserId, 'artem', 'https://www.instagram.com/somewhere');
+
+  const { ctx, rawCtx, alerts } = fakeCtx('member', userId);
+  withCallbackData(rawCtx, `admin:block:${chatId}:${targetUserId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
+  assert.equal(isUserBlocked(chatId, targetUserId), false);
+});
+
+test('handleAdminAction "block" blocks the target and drops their current-week submission', async () => {
+  const userId = 30011;
+  const chatId = -30011;
+  const targetUserId = 1;
+  submitPlace(chatId, targetUserId, 'artem', 'https://www.instagram.com/somewhere');
+
+  const { ctx, rawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:block:${chatId}:${targetUserId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(isUserBlocked(chatId, targetUserId), true);
+  assert.equal(getAllSubmissions(chatId).length, 0);
+  assert.equal(listBlockedUsersInGroup(chatId)[0]?.username, 'artem');
+});
+
+test('handleAdminAction "unblock" reverses "block" and lets the target submit again', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+
+  const userId = 30012;
+  const chatId = -30012;
+  const targetUserId = 1;
+  submitPlace(chatId, targetUserId, 'artem', 'https://www.instagram.com/somewhere');
+
+  const { ctx: blockCtx, rawCtx: blockRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(blockRawCtx, `admin:block:${chatId}:${targetUserId}`);
+  await handleAdminAction(blockCtx);
+  assert.equal(isUserBlocked(chatId, targetUserId), true);
+
+  const { ctx: unblockCtx, rawCtx: unblockRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(unblockRawCtx, `admin:unblock:${chatId}:${targetUserId}`);
+  await handleAdminAction(unblockCtx);
+
+  assert.equal(isUserBlocked(chatId, targetUserId), false);
+  t.mock.timers.tick(10_001); // past the resubmit cooldown, otherwise this looks rate_limited
+  const result = submitPlace(chatId, targetUserId, 'artem', 'https://www.instagram.com/somewhere');
+  assert.equal(result.ok, true);
+});
+
+test('handleAdminAction refuses "blocklist" for a user who is no longer an admin', async () => {
+  const userId = 30013;
+  const chatId = -30013;
+
+  const { ctx, rawCtx, alerts } = fakeCtx('member', userId);
+  withCallbackData(rawCtx, `admin:blocklist:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
 });

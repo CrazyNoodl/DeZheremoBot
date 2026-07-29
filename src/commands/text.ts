@@ -47,8 +47,13 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
         ? '🔒 Запізно — заявки на цей тиждень уже закрито. До зустрічі наступного тижня!'
         : result.reason === 'paused'
           ? '⏸ Цього тижня ДеЖеремо на паузі — заявки поки не приймаються. Скоро повернемось!'
-          : `Це вже твій поточний варіант — міняти нічого 😉\n\n${buildMenuText(chatId, userId)}`;
-    const keyboard = result.reason === 'locked' || result.reason === 'paused' ? undefined : buildMenuKeyboard(chatId, userId);
+          : result.reason === 'blocked'
+            ? '🚫 Тебе заблокували в цій групі — додавати заявки більше не можна.'
+            : `Це вже твій поточний варіант — міняти нічого 😉\n\n${buildMenuText(chatId, userId)}`;
+    const keyboard =
+      result.reason === 'locked' || result.reason === 'paused' || result.reason === 'blocked'
+        ? undefined
+        : buildMenuKeyboard(chatId, userId);
     await updateMenuMessage(ctx, chatId, userId, text, keyboard);
     await ctx.deleteMessage();
     return;

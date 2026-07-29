@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { handleTextMessage } from './text.js';
 import { getAwaitingChatId, markAwaitingSubmission } from '../storage/pendingState.js';
-import { lockSubmissions, MAX_PLACE_LENGTH, pauseGroup } from '../services/submissionService.js';
+import { blockUserFromGroup, lockSubmissions, MAX_PLACE_LENGTH, pauseGroup } from '../services/submissionService.js';
 
 function fakeCtx(userId: number, text: string) {
   const replies: string[] = [];
@@ -64,6 +64,20 @@ test('a paused chat rejects the submission and clears the awaiting state', async
   assert.equal(getAwaitingChatId(userId), undefined);
   assert.equal(deletions.length, 1);
   assert.match(replies[0], /на паузі/);
+});
+
+test('a blocked user is rejected and the awaiting state is cleared', async () => {
+  const userId = 13006;
+  const chatId = -12006;
+  blockUserFromGroup(chatId, userId, 'tester', 999);
+  markAwaitingSubmission(userId, chatId);
+  const { ctx, replies, deletions } = fakeCtx(userId, 'https://www.instagram.com/dezheroma');
+
+  await handleTextMessage(ctx);
+
+  assert.equal(getAwaitingChatId(userId), undefined);
+  assert.equal(deletions.length, 1);
+  assert.match(replies[0], /заблокували/);
 });
 
 test('a successful submission clears the awaiting state and confirms', async () => {

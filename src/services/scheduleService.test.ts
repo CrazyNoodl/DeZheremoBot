@@ -8,6 +8,7 @@ import { test } from 'node:test';
 // import time — same isolation approach as storage/groupSchedules.test.ts.
 process.env.DEZHEREMO_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'dzb-scheduleservice-'));
 const {
+  getFinalReminderWeekday,
   getSchedule,
   isValidTime,
   resetSchedule,
@@ -85,4 +86,22 @@ test('updateDeadlineSchedule rejects moving lockTime to at/before an existing re
 
   assert.deepEqual(result, { ok: false, reason: 'reminder_after_lock' });
   assert.deepEqual(getSchedule(-8008), { ...DEFAULT_SCHEDULE, reminderWeekdays: [5], reminderTime: '17:00' });
+});
+
+test('getFinalReminderWeekday picks the reminder that lands on the deadline day', () => {
+  assert.equal(getFinalReminderWeekday({ ...DEFAULT_SCHEDULE, reminderWeekdays: [1, 3, 5], deadlineWeekday: 5 }), 5);
+});
+
+test('getFinalReminderWeekday picks the reminder closest before the deadline when none matches it', () => {
+  // Mon(1)/Wed(3) reminders, Friday(5) deadline — Wed is 2 days before Friday, Mon is 4 days before.
+  assert.equal(getFinalReminderWeekday({ ...DEFAULT_SCHEDULE, reminderWeekdays: [1, 3], deadlineWeekday: 5 }), 3);
+});
+
+test('getFinalReminderWeekday wraps across the week boundary', () => {
+  // Sat(6) reminder, Mon(1) deadline — Sat is 2 days before Monday going forward through Sunday.
+  assert.equal(getFinalReminderWeekday({ ...DEFAULT_SCHEDULE, reminderWeekdays: [6, 2], deadlineWeekday: 1 }), 6);
+});
+
+test('getFinalReminderWeekday returns the only reminder when just one is configured', () => {
+  assert.equal(getFinalReminderWeekday({ ...DEFAULT_SCHEDULE, reminderWeekdays: [2], deadlineWeekday: 5 }), 2);
 });

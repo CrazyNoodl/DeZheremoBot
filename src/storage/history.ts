@@ -49,6 +49,32 @@ export interface DrawRecord {
   submissions: Submission[];
 }
 
+// submissions_history has no chat_id of its own — chat_id lives on the weekly_draws row it
+// belongs to (via draw_id), so scoping to a chat requires this join.
+const historicalSubmittersStmt = db.prepare(`
+  SELECT sh.user_id AS userId, sh.username, MAX(sh.id) AS lastId
+  FROM submissions_history sh
+  JOIN weekly_draws wd ON wd.id = sh.draw_id
+  WHERE wd.chat_id = ?
+  GROUP BY sh.user_id
+`);
+
+export interface HistoricalSubmitter {
+  userId: number;
+  username: string;
+}
+
+// Everyone who has ever submitted a place in this chat in a past week — used as the "known
+// members" roster for the final reminder's non-submitter tagging, since the Bot API has no way to
+// list a group's actual membership. SQLite's bare-column + MAX(id) combo returns username from the
+// same row as the max id per user (documented SQLite behavior), so a renamed user shows their most
+// recent username instead of their first-ever one.
+export function getHistoricalSubmitters(chatId: number): HistoricalSubmitter[] {
+  return (historicalSubmittersStmt.all(chatId) as unknown as (HistoricalSubmitter & { lastId: number })[]).map(
+    ({ userId, username }) => ({ userId, username }),
+  );
+}
+
 export function recordDraw(record: DrawRecord): void {
   insertDrawStmt.run(
     record.chatId,

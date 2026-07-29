@@ -1,4 +1,6 @@
 import { Markup, TelegramError, type Context } from 'telegraf';
+import { getKyivNow } from '../kyivTime.js';
+import { sendTaggedReminder } from '../scheduler.js';
 import {
   getSchedule,
   isValidTime,
@@ -8,6 +10,7 @@ import {
   type GroupScheduleConfig,
   type UpdateResult,
 } from '../services/scheduleService.js';
+import { markFired } from '../storage/firedEvents.js';
 import {
   clearScheduleEditState,
   getScheduleEditState,
@@ -61,6 +64,7 @@ function buildSummaryKeyboard(chatId: number) {
   return Markup.inlineKeyboard([
     [Markup.button.callback('✏️ Дні та час нагадувань', `sched:edit_reminder:${chatId}`)],
     [Markup.button.callback('✏️ День та час дедлайну', `sched:edit_deadline:${chatId}`)],
+    [Markup.button.callback('🔔 Надіслати нагадування зараз', `sched:remind:${chatId}`)],
     [Markup.button.callback('↩️ Скинути на дефолт', `sched:reset:${chatId}`)],
   ]);
 }
@@ -228,7 +232,7 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
   // на дефолт" button stays pressable indefinitely) or mid-wizard, and without this, someone
   // demoted after opening /schedule could still rewrite that group's schedule.
   const targetChatId =
-    action === 'select' || action === 'edit_reminder' || action === 'edit_deadline' || action === 'reset'
+    action === 'select' || action === 'edit_reminder' || action === 'edit_deadline' || action === 'reset' || action === 'remind'
       ? Number(arg)
       : action === 'day' || action === 'days_done' || action === 'back'
         ? getScheduleEditState(userId)?.chatId
@@ -279,6 +283,17 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
   if (action === 'reset') {
     const chatId = Number(arg);
     resetSchedule(chatId);
+    await renderSummary(ctx, userId, chatId);
+    return;
+  }
+
+  if (action === 'remind') {
+    const chatId = Number(arg);
+    // Marks today's reminder as already fired so the scheduler's own tick doesn't send a second,
+    // duplicate reminder later the same day if this group's scheduled reminder time hasn't passed
+    // yet — same reasoning as admin.ts's "force draw now" marking 'draw' fired.
+    markFired(chatId, 'reminder', getKyivNow().date);
+    await sendTaggedReminder(ctx.telegram, ctx.botInfo.username, chatId);
     await renderSummary(ctx, userId, chatId);
     return;
   }
