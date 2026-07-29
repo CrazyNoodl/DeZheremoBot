@@ -14,13 +14,17 @@ const { getScheduleEditState, setScheduleEditState } = await import('../storage/
 const { getSchedule, updateReminderSchedule } = await import('../services/scheduleService.js');
 const { isGroupPaused, pauseGroup } = await import('../services/submissionService.js');
 const { DEFAULT_SCHEDULE } = await import('../storage/groupSchedules.js');
+const { hasFiredToday } = await import('../storage/firedEvents.js');
+const { getKyivNow } = await import('../kyivTime.js');
 
 function fakeCtx(status: string, userId: number) {
   const replies: string[] = [];
   const alerts: string[] = [];
+  const sentMessages: { chatId: number; text: string; extra?: object }[] = [];
   const ctx = {
     from: { id: userId },
     chat: { id: userId },
+    botInfo: { username: 'TestBot' },
     callbackQuery: undefined as { data: string; message?: { chat: { id: number }; message_id: number } } | undefined,
     telegram: {
       getChatMember: async () => {
@@ -29,6 +33,11 @@ function fakeCtx(status: string, userId: number) {
       },
       editMessageText: async () => {
         throw new Error('no message tracked to edit in this test');
+      },
+      getChatMembersCount: async () => 1,
+      sendMessage: async (chatId: number, text: string, extra?: object) => {
+        sentMessages.push({ chatId, text, extra });
+        return { message_id: 999 };
       },
     },
     reply: async (text: string) => {
@@ -39,7 +48,7 @@ function fakeCtx(status: string, userId: number) {
       if (extra?.show_alert && text) alerts.push(text);
     },
   };
-  return { ctx: ctx as unknown as Context, rawCtx: ctx, replies, alerts };
+  return { ctx: ctx as unknown as Context, rawCtx: ctx, replies, alerts, sentMessages };
 }
 
 function withCallbackData(rawCtx: { callbackQuery?: { data: string } }, data: string) {
@@ -112,6 +121,32 @@ test('handleScheduleAction still refuses "select" for a non-admin (pre-existing 
   await handleScheduleAction(ctx);
 
   assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
+});
+
+test('handleScheduleAction refuses "remind" for a user who is no longer an admin and sends nothing', async () => {
+  const userId = 20020;
+  const chatId = -20020;
+
+  const { ctx, rawCtx, alerts, sentMessages } = fakeCtx('member', userId);
+  withCallbackData(rawCtx, `sched:remind:${chatId}`);
+  await handleScheduleAction(ctx);
+
+  assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
+  assert.deepEqual(sentMessages, []);
+});
+
+test('handleScheduleAction sends a tagged reminder and marks it fired when a current admin taps "remind"', async () => {
+  const userId = 20021;
+  const chatId = -20021;
+
+  const { ctx, rawCtx, sentMessages } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `sched:remind:${chatId}`);
+  await handleScheduleAction(ctx);
+
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].chatId, chatId);
+  assert.match(sentMessages[0].text, /ДеЖеремо цього тижня/);
+  assert.equal(hasFiredToday(chatId, 'reminder', getKyivNow().date), true);
 });
 
 test('"reset" does not clear a group\'s paused state — pause is independent of schedule config', async () => {

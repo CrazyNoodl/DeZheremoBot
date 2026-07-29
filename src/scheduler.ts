@@ -1,8 +1,10 @@
 import cron from 'node-cron';
-import type { Telegraf } from 'telegraf';
-import { buildDrawAnnouncement, pickRandomEmoji } from './announcements.js';
+import type { Telegraf, Telegram } from 'telegraf';
+import { buildDrawAnnouncement, buildFinalReminderExtra, pickRandomEmoji } from './announcements.js';
 import { buildGroupMenu } from './commands/keyboard.js';
 import { getKyivNow } from './kyivTime.js';
+import { getNonSubmittersInfo } from './services/reminderService.js';
+import { getFinalReminderWeekday } from './services/scheduleService.js';
 import {
   isGroupPaused,
   lockSubmissions,
@@ -12,13 +14,55 @@ import {
 } from './services/submissionService.js';
 import { hasFiredToday, markFired } from './storage/firedEvents.js';
 import { listGroupChats } from './storage/groupChats.js';
-import { getGroupSchedule } from './storage/groupSchedules.js';
+import { getGroupSchedule, type GroupScheduleConfig } from './storage/groupSchedules.js';
 import { sendToChat } from './telegramBroadcast.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Rotated so the same weekly message doesn't read as identically robotic every time.
 const REMINDER_EMOJI = ['🍽', '🍕', '🥗', '🍜'] as const;
+
+// getChatMembersCount can fail (rate limit, transient network) — falling back to "no unknown
+// members" degrades to just tagging the people we do know about instead of losing the whole
+// reminder, which matters more than an accurate unknown-count on an off day.
+async function fetchTotalMembers(telegram: Telegram, chatId: number): Promise<number | undefined> {
+  try {
+    return await telegram.getChatMembersCount(chatId);
+  } catch (err) {
+    console.error(`[scheduler] failed to fetch member count for chat ${chatId}:`, err);
+    return undefined;
+  }
+}
+
+// Sends the reminder with the non-submitter tag-list appended. Shared by the scheduler's own
+// automatic reminder (on whichever day getFinalReminderWeekday picks) and commands/schedule.ts's
+// "force reminder now" button — so an admin manually nudging stragglers gets the exact same
+// tagged message a scheduled final reminder would have sent.
+export async function sendTaggedReminder(telegram: Telegram, botUsername: string, chatId: number): Promise<void> {
+  const baseText = `${pickRandomEmoji(REMINDER_EMOJI)} ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇`;
+  const keyboard = buildGroupMenu(botUsername, chatId);
+
+  const totalMembers = await fetchTotalMembers(telegram, chatId);
+  // Passing 0 when the fetch failed still yields unknownCount 0 (the formula floors at 0), so
+  // nonSubmitters tagging degrades gracefully without a separate fallback branch.
+  const { nonSubmitters, unknownCount } = getNonSubmittersInfo(chatId, totalMembers ?? 0);
+
+  const text = `${baseText}\n\n${buildFinalReminderExtra(nonSubmitters, unknownCount)}`;
+  await sendToChat(telegram, chatId, text, { ...keyboard, parse_mode: 'HTML' }, DAY_MS);
+}
+
+// The reminder closest to the deadline gets the non-submitter tag-list appended — see
+// scheduleService's getFinalReminderWeekday for how "closest" is chosen when no reminder falls on
+// the deadline day itself.
+async function sendReminder(bot: Telegraf, chatId: number, schedule: GroupScheduleConfig, weekday: number): Promise<void> {
+  if (weekday !== getFinalReminderWeekday(schedule)) {
+    const baseText = `${pickRandomEmoji(REMINDER_EMOJI)} ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇`;
+    await sendToChat(bot.telegram, chatId, baseText, buildGroupMenu(bot.botInfo!.username, chatId), DAY_MS);
+    return;
+  }
+
+  await sendTaggedReminder(bot.telegram, bot.botInfo!.username, chatId);
+}
 
 export function startScheduler(bot: Telegraf): void {
   cron.schedule('* * * * *', () => {
@@ -48,15 +92,7 @@ export function startScheduler(bot: Telegraf): void {
         !hasFiredToday(chatId, 'reminder', date)
       ) {
         markFired(chatId, 'reminder', date);
-        if (!paused) {
-          sendToChat(
-            bot.telegram,
-            chatId,
-            `${pickRandomEmoji(REMINDER_EMOJI)} ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇`,
-            buildGroupMenu(bot.botInfo!.username, chatId),
-            DAY_MS,
-          );
-        }
+        if (!paused) sendReminder(bot, chatId, schedule, weekday);
       }
 
       if (weekday === schedule.deadlineWeekday && time >= schedule.lockTime && !hasFiredToday(chatId, 'lock', date)) {
