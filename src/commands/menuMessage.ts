@@ -31,8 +31,11 @@ export function buildMenuText(groupChatId: number, userId: number): string {
 export function buildMenuKeyboard(groupChatId: number, userId: number) {
   const submission = getUserSubmission(groupChatId, userId);
   const declined = submission?.status === 'declined';
+  // While declined, "➕ Додати" would be a second button leading to the exact same "send me a
+  // link" prompt as cancelling the decline (see handleDeclineAction) — so it's dropped here rather
+  // than shown redundantly alongside it.
   return Markup.inlineKeyboard([
-    [Markup.button.callback(submission?.status === 'submitted' ? '✏️ Змінити' : '➕ Додати', SUBMIT_ACTION)],
+    ...(declined ? [] : [[Markup.button.callback(submission?.status === 'submitted' ? '✏️ Змінити' : '➕ Додати', SUBMIT_ACTION)]]),
     [Markup.button.callback(declined ? '↩️ Скасувати «не йду»' : '🙅 Не йду цього тижня', DECLINE_ACTION)],
   ]);
 }

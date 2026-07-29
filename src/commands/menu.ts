@@ -2,13 +2,20 @@ import type { Context } from 'telegraf';
 import { escapeHtml, placeLink } from '../htmlFormat.js';
 import { isChatMember } from './access.js';
 import { promptForPlace } from './add.js';
+import { DECLINE_GROUP_ACTION } from './keyboard.js';
 import { buildMenuKeyboard, buildMenuText, DECLINE_ACTION, sendMenuMessage, SUBMIT_ACTION, updateMenuMessage } from './menuMessage.js';
 import { safeAnswerCbQuery } from './panel.js';
-import { declinePlace, isGroupPaused, isSubmissionLocked, isUserBlocked } from '../services/submissionService.js';
+import {
+  declinePlace,
+  getUserSubmission,
+  isGroupPaused,
+  isSubmissionLocked,
+  isUserBlocked,
+} from '../services/submissionService.js';
 import { getMenuMessage } from '../storage/menuMessages.js';
 import { sendToChat } from '../telegramBroadcast.js';
 
-export { SUBMIT_ACTION, DECLINE_ACTION };
+export { SUBMIT_ACTION, DECLINE_ACTION, DECLINE_GROUP_ACTION };
 
 // Exported so text.ts's rejection replies for the same two states reuse these literals instead of
 // retyping them — one string each, so wording can't drift between "opening the menu while
@@ -125,4 +132,68 @@ export async function handleDeclineAction(ctx: Context): Promise<void> {
   }
 
   await updateMenuMessage(ctx, groupChatId, userId, buildMenuText(groupChatId, userId), buildMenuKeyboard(groupChatId, userId));
+}
+
+// Unlike handleDeclineAction above, this is deliberately one-way ("record не йду"), not a toggle —
+// fired straight from the group's own reminder/menu message rather than the private-chat personal
+// menu, so no deep link is needed (a callback query fired from a group message already carries
+// that group as ctx.chat). A shared group button can't change its own label per viewer the way
+// the private menu's can (Telegram renders one keyboard for everyone who sees the message), so a
+// second tap here must not silently cancel an already-recorded decline with no visible sign it
+// just happened — it stays a no-op confirmation instead. Reversing a decline still works, just not
+// through this button: submitting a real place (via "➕ Додати" in the private chat) already
+// overwrites a decline automatically, same as it always has. All feedback (idempotent confirm,
+// success, or blocked/paused/locked) goes out as a private answerCbQuery toast, since this shared
+// message can't be edited into a per-user confirmation card either.
+export async function handleGroupDeclineAction(ctx: Context): Promise<void> {
+  const chatId = ctx.chat?.id;
+  const userId = ctx.from?.id;
+  if (!chatId || !userId) return;
+
+  if (!(await isChatMember(ctx, chatId, userId))) {
+    await safeAnswerCbQuery(ctx, '🔒 Здається, ти вже не в цій групі.', { show_alert: true });
+    return;
+  }
+
+  if (isUserBlocked(chatId, userId)) {
+    await safeAnswerCbQuery(ctx, BLOCKED_MESSAGE, { show_alert: true });
+    return;
+  }
+
+  if (isGroupPaused(chatId)) {
+    await safeAnswerCbQuery(ctx, PAUSED_MESSAGE, { show_alert: true });
+    return;
+  }
+
+  if (isSubmissionLocked(chatId)) {
+    await safeAnswerCbQuery(ctx, LOCKED_MESSAGE, { show_alert: true });
+    return;
+  }
+
+  if (getUserSubmission(chatId, userId)?.status === 'declined') {
+    await safeAnswerCbQuery(ctx, '🙅 Ти вже позначив(-ла), що не йдеш цього тижня.');
+    return;
+  }
+
+  const username = ctx.from?.username ?? ctx.from?.first_name ?? 'Хтось';
+  const result = declinePlace(chatId, userId, username);
+
+  if (!result.ok) {
+    // Rare race — state changed between the checks above and this call. Same messages as above.
+    const message =
+      result.reason === 'blocked' ? BLOCKED_MESSAGE : result.reason === 'paused' ? PAUSED_MESSAGE : LOCKED_MESSAGE;
+    await safeAnswerCbQuery(ctx, message, { show_alert: true });
+    return;
+  }
+
+  if (result.previousPlace !== undefined) {
+    await sendToChat(
+      ctx.telegram,
+      chatId,
+      `🙅 <b>${escapeHtml(username)}</b> цього тижня не йде (варіант знято: ${placeLink(result.previousPlace)})`,
+      { parse_mode: 'HTML' },
+    );
+  }
+
+  await safeAnswerCbQuery(ctx, '🙅 Записано: не йдеш цього тижня.');
 }
