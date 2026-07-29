@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { handleAdminAction, handleAdminCommand } from './commands/admin.js';
 import { handleMyChatMember, handleNewChatTitle } from './commands/groupChat.js';
+import { handleHelpCommand } from './commands/help.js';
 import { buildGroupMenu, DECLINE_GROUP_ACTION, START_ADD_PREFIX, START_LIST_PREFIX } from './commands/keyboard.js';
 import { showSubmissionsList } from './commands/list.js';
 import {
@@ -33,13 +34,13 @@ bot.start(async (ctx) => {
       const chatId = Number(ctx.startPayload.slice(START_LIST_PREFIX.length));
       await showSubmissionsList(ctx, chatId);
     } else {
-      await ctx.reply('👋 Привіт! Я ДеЖеремоБот — допомагаю компанії визначитись, куди піти їсти. Тисни "➕ Додати" в груповому чаті, а я тут, у приватці, спитаю деталі.');
+      await ctx.reply('👋 Привіт! Я ДеЖеремоБот — допомагаю компанії визначитись, куди піти їсти. Тисни "➕ Додати" в груповому чаті, а я тут, у приватці, спитаю деталі. Команда /help розкаже, як усе працює.');
     }
     return;
   }
 
   addGroupChat(ctx.chat.id, ctx.chat.title); // backfills the title for chats registered before it was tracked
-  await ctx.reply('Обирай дію:', buildGroupMenu(ctx.botInfo.username, ctx.chat.id));
+  await ctx.reply('Обирай дію: (команда /help розкаже, як усе працює)', buildGroupMenu(ctx.botInfo.username, ctx.chat.id));
 });
 
 bot.on('my_chat_member', handleMyChatMember);
@@ -51,6 +52,7 @@ bot.action(/^sched:/, handleScheduleAction);
 bot.command('schedule', handleScheduleCommand);
 bot.action(/^admin:/, handleAdminAction);
 bot.command('admin', handleAdminCommand);
+bot.command('help', handleHelpCommand);
 bot.on('text', handleTextMessage);
 
 bot.launch(() => {
