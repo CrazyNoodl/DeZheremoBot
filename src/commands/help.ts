@@ -19,16 +19,10 @@ function buildScheduleLine(config: GroupScheduleConfig): string {
   );
 }
 
-// /help works the same in a group and in a private chat with the bot — unlike /schedule and /admin,
-// it needs no admin check or chatId resolution, so it just replies wherever it was typed. When typed
-// in a group, it additionally shows that group's own actual schedule (getSchedule(ctx.chat.id)) instead
-// of only the generic default, since a group's admin may have customized it via /schedule.
-export async function handleHelpCommand(ctx: Context): Promise<void> {
-  const scheduleLine = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup'
-    ? buildScheduleLine(getSchedule(ctx.chat.id))
-    : '';
+function buildHelpText(schedule?: GroupScheduleConfig): string {
+  const scheduleLine = schedule ? buildScheduleLine(schedule) : '';
 
-  const text =
+  return (
     `🍽 <b>ДеЖеремоБот</b> допомагає компанії вирішити, де поїсти.\n\n` +
     `Раз на тиждень усе йде за таким сценарієм:\n\n` +
     `1️⃣ <b>Нагадування.</b> Бот пише в групу з кнопками «➕ Додати» / «📋 Список» / «🙅 Не йду». ` +
@@ -45,7 +39,18 @@ export async function handleHelpCommand(ctx: Context): Promise<void> {
     scheduleLine +
     `За замовчуванням: нагадування Пн/Ср/Пт о 10:00, закриття заявок Пт 18:00, жеребкування Пт 18:15 — ` +
     `але адмін групи може змінити дні й час через приватну команду /schedule, а також керувати циклом ` +
-    `(пауза, форс-розіграш тощо) через /admin.`;
+    `(пауза, форс-розіграш тощо) через /admin.`
+  );
+}
 
-  await ctx.reply(text, { parse_mode: 'HTML' });
+// /help works the same in a group and in a private chat with the bot — unlike /schedule and /admin,
+// it needs no admin check or chatId resolution, so it just replies wherever it was typed. When typed
+// in a group, it additionally shows that group's own actual schedule (getSchedule(ctx.chat.id)) instead
+// of only the generic default, since a group's admin may have already customized it via /schedule.
+export async function handleHelpCommand(ctx: Context): Promise<void> {
+  const schedule = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup'
+    ? getSchedule(ctx.chat.id)
+    : undefined;
+
+  await ctx.reply(buildHelpText(schedule), { parse_mode: 'HTML' });
 }
