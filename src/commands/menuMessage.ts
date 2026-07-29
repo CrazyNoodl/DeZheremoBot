@@ -5,6 +5,7 @@ import { getGroupChatTitle } from '../storage/groupChats.js';
 import { clearMenuMessage, getMenuMessage, setMenuMessage } from '../storage/menuMessages.js';
 
 export const SUBMIT_ACTION = 'submit';
+export const DECLINE_ACTION = 'decline';
 
 // Telegram bots can't edit messages older than this — once a menu message ages
 // out of that window, delete it instead of leaving a dead card in the chat.
@@ -19,6 +20,9 @@ export function withGroupLabel(groupChatId: number, text: string): string {
 
 export function buildMenuText(groupChatId: number, userId: number): string {
   const submission = getUserSubmission(groupChatId, userId);
+  if (submission?.status === 'declined') {
+    return '🙅 Записано: цього тижня ти не йдеш.\n\nПлани зміняться — тисни кнопку нижче 👇';
+  }
   return submission
     ? `📍 Твій варіант цього тижня: ${placeLink(submission.place)}\n\nХочеш змінити — тисни кнопку нижче 👇`
     : '🤔 Ще нема варіанту на цей тиждень? Додай посилання на заклад — тисни кнопку нижче 👇';
@@ -26,8 +30,10 @@ export function buildMenuText(groupChatId: number, userId: number): string {
 
 export function buildMenuKeyboard(groupChatId: number, userId: number) {
   const submission = getUserSubmission(groupChatId, userId);
+  const declined = submission?.status === 'declined';
   return Markup.inlineKeyboard([
-    [Markup.button.callback(submission ? '✏️ Змінити' : '➕ Додати', SUBMIT_ACTION)],
+    [Markup.button.callback(submission?.status === 'submitted' ? '✏️ Змінити' : '➕ Додати', SUBMIT_ACTION)],
+    [Markup.button.callback(declined ? '↩️ Скасувати «не йду»' : '🙅 Не йду цього тижня', DECLINE_ACTION)],
   ]);
 }
 

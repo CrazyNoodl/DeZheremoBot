@@ -15,6 +15,9 @@ export interface NonSubmittersInfo {
 // number param here so this stays a pure, easily testable function.
 export function getNonSubmittersInfo(chatId: number, totalMembers: number): NonSubmittersInfo {
   const historical = getHistoricalSubmitters(chatId);
+  // Includes 'declined' rows too, not just real place submissions — a decliner has already
+  // responded this week, so nudging them by name here would be nagging someone who opted out on
+  // purpose.
   const current = listSubmissions(chatId);
   const currentIds = new Set(current.map((s) => s.userId));
   // A blocked user can never submit this week no matter how long it goes on, so nudging them by

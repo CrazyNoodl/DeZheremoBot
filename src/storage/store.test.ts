@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { addSubmission, clearSubmissions, getSubmission, listSubmissions } from './store.js';
+import { addDecline, addSubmission, clearSubmissions, getSubmission, listSubmissions } from './store.js';
 
 test('addSubmission then getSubmission round-trips', () => {
   addSubmission(-1001, 1, 'artem', 'Дежерьома');
@@ -8,7 +8,10 @@ test('addSubmission then getSubmission round-trips', () => {
   // node:sqlite rows come back as null-prototype objects — spread into a plain object before
   // comparing, since deepEqual from node:assert/strict is an alias for deepStrictEqual and checks
   // prototypes too.
-  assert.deepEqual({ ...getSubmission(-1001, 1) }, { userId: 1, username: 'artem', place: 'Дежерьома' });
+  assert.deepEqual(
+    { ...getSubmission(-1001, 1) },
+    { userId: 1, username: 'artem', place: 'Дежерьома', status: 'submitted' },
+  );
 });
 
 test('addSubmission overwrites the same user\'s previous place in that chat', () => {
@@ -40,4 +43,23 @@ test('clearSubmissions only removes the given chat', () => {
 
 test('getSubmission returns undefined for an unknown user', () => {
   assert.equal(getSubmission(-1007, 999), undefined);
+});
+
+test('addDecline records a declined row with an empty place', () => {
+  addDecline(-1008, 1, 'artem');
+
+  assert.deepEqual({ ...getSubmission(-1008, 1) }, { userId: 1, username: 'artem', place: '', status: 'declined' });
+});
+
+test('addDecline overwrites a previous place submission for that user, and vice versa', () => {
+  addSubmission(-1009, 1, 'artem', 'Дежерьома');
+  addDecline(-1009, 1, 'artem');
+  assert.equal(getSubmission(-1009, 1)?.status, 'declined');
+  assert.equal(listSubmissions(-1009).length, 1);
+
+  addSubmission(-1009, 1, 'artem', 'Пузата хата');
+  assert.deepEqual(
+    { ...getSubmission(-1009, 1) },
+    { userId: 1, username: 'artem', place: 'Пузата хата', status: 'submitted' },
+  );
 });

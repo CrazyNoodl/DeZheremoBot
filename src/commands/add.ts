@@ -1,6 +1,6 @@
 import type { Context } from 'telegraf';
-import { markAwaitingSubmission } from '../storage/pendingState.js';
-import { updateMenuMessage } from './menuMessage.js';
+import { clearAwaitingSubmission, isCurrentAwaitingToken, markAwaitingSubmission } from '../storage/pendingState.js';
+import { buildMenuKeyboard, buildMenuText, updateMenuMessage } from './menuMessage.js';
 
 // Shown both when prompting for a place and when a submitted one fails format validation
 // (services/submissionService.ts's isValidPlaceLink) — keeps the accepted formats worded
@@ -12,11 +12,27 @@ export const PLACE_LINK_FORMAT_HINT =
   '• Instagram — напр. https://www.instagram.com/milkbarkyiv\n\n' +
   'Спробуй ще раз 👇';
 
+// commands/text.ts checks getAwaitingChatId before treating a message as a submission, so a prompt
+// left unanswered (user abandons it, or gets here via handleDeclineAction's cancel and never
+// actually types a place) would otherwise silently swallow every later text message from that user
+// as an attempted place submission, forever — same reasoning as schedule.ts's SCHEDULE_EDIT_TTL_MS.
+const AWAITING_SUBMISSION_TTL_MS = 60 * 60 * 1000;
+
 export async function promptForPlace(ctx: Context, groupChatId: number): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
 
-  markAwaitingSubmission(userId, groupChatId);
+  const token = markAwaitingSubmission(userId, groupChatId);
+  setTimeout(() => {
+    // Not the current prompt anymore — either already resolved (submitted/rejected) or superseded
+    // by a newer promptForPlace call for this user, whose own timer owns the cleanup instead.
+    if (!isCurrentAwaitingToken(userId, token)) return;
+    clearAwaitingSubmission(userId);
+    updateMenuMessage(ctx, groupChatId, userId, buildMenuText(groupChatId, userId), buildMenuKeyboard(groupChatId, userId)).catch(
+      () => {},
+    );
+  }, AWAITING_SUBMISSION_TTL_MS);
+
   await updateMenuMessage(
     ctx,
     groupChatId,

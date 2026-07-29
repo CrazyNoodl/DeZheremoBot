@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   blockUserFromGroup,
+  declinePlace,
   getAllSubmissions,
   isGroupPaused,
   isSubmissionLocked,
@@ -12,11 +13,13 @@ import {
   MAX_PLACE_LENGTH,
   pauseGroup,
   pickWeeklyWinner,
+  recordDraw,
   resetWeek,
   resumeGroup,
   submitPlace,
   unblockUserFromGroup,
 } from './submissionService.js';
+import { getHistoricalSubmitters } from '../storage/history.js';
 
 const DEZHEROMA_LINK = 'https://www.instagram.com/dezheroma';
 const PUZATA_HATA_LINK = 'https://www.instagram.com/puzatahata';
@@ -184,6 +187,62 @@ test('listBlockedUsersInGroup returns everyone blocked in that chat', () => {
   const blocked = listBlockedUsersInGroup(-9018);
 
   assert.equal(blocked.length, 2);
+});
+
+test('declinePlace records a decline, and a second decline cancels it back to no response', () => {
+  const first = declinePlace(-9019, 1, 'artem');
+  assert.deepEqual(first, { ok: true, declined: true, previousPlace: undefined });
+  assert.equal(getAllSubmissions(-9019)[0]?.status, 'declined');
+
+  const second = declinePlace(-9019, 1, 'artem');
+  assert.deepEqual(second, { ok: true, declined: false });
+  assert.equal(getAllSubmissions(-9019).length, 0);
+});
+
+test('declinePlace overwrites an existing place submission, and submitPlace overwrites a decline', (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+
+  submitPlace(-9020, 1, 'artem', DEZHEROMA_LINK);
+  const declineResult = declinePlace(-9020, 1, 'artem');
+  assert.deepEqual(declineResult, { ok: true, declined: true, previousPlace: DEZHEROMA_LINK });
+  assert.equal(getAllSubmissions(-9020)[0]?.status, 'declined');
+
+  t.mock.timers.tick(10_001); // past the resubmit cooldown, otherwise this looks rate_limited
+  const result = submitPlace(-9020, 1, 'artem', DEZHEROMA_LINK);
+  // Fresh submission (previousPlace undefined), not "updated", since the prior row was a decline,
+  // not a real place — text.ts renders these two outcomes with different wording.
+  assert.deepEqual(result, { ok: true, previousPlace: undefined });
+  assert.equal(getAllSubmissions(-9020)[0]?.status, 'submitted');
+});
+
+test('declinePlace is rejected the same way submitPlace is when blocked/paused/locked', () => {
+  blockUserFromGroup(-9021, 1, 'artem', 999);
+  assert.deepEqual(declinePlace(-9021, 1, 'artem'), { ok: false, reason: 'blocked' });
+
+  pauseGroup(-9022);
+  assert.deepEqual(declinePlace(-9022, 1, 'artem'), { ok: false, reason: 'paused' });
+
+  lockSubmissions(-9023);
+  assert.deepEqual(declinePlace(-9023, 1, 'artem'), { ok: false, reason: 'locked' });
+});
+
+test('pickWeeklyWinner never draws a declined response', () => {
+  submitPlace(-9024, 1, 'artem', DEZHEROMA_LINK);
+  declinePlace(-9024, 2, 'olya');
+
+  const winner = pickWeeklyWinner(-9024);
+
+  assert.equal(winner?.userId, 1);
+});
+
+test('recordDraw does not add a decliner to getHistoricalSubmitters', () => {
+  submitPlace(-9025, 1, 'artem', DEZHEROMA_LINK);
+  declinePlace(-9025, 2, 'olya');
+
+  recordDraw(-9025, pickWeeklyWinner(-9025));
+
+  const submitters = getHistoricalSubmitters(-9025).map((s) => s.userId);
+  assert.deepEqual(submitters, [1]);
 });
 
 test('resetWeek clears submissions and unlocks the chat', () => {

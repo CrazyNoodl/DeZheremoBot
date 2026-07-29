@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { handleSubmitAction, showPersonalMenu } from './menu.js';
-import { blockUserFromGroup, pauseGroup } from '../services/submissionService.js';
+import { handleDeclineAction, handleSubmitAction, showPersonalMenu } from './menu.js';
+import { blockUserFromGroup, getAllSubmissions, pauseGroup, submitPlace } from '../services/submissionService.js';
+import { getAwaitingChatId } from '../storage/pendingState.js';
 import { setMenuMessage } from '../storage/menuMessages.js';
 
 function fakeCtx(status: string, userId: number, opts: { answerCbQueryThrows?: boolean } = {}) {
   const replies: string[] = [];
+  const sentMessages: Array<{ chatId: number; text: string }> = [];
   const ctx = {
     from: { id: userId },
     chat: { id: userId }, // private chat id, distinct per test via userId
@@ -18,6 +20,10 @@ function fakeCtx(status: string, userId: number, opts: { answerCbQueryThrows?: b
       editMessageText: async () => {
         throw new Error('no message tracked to edit in this test');
       },
+      sendMessage: async (chatId: number, text: string) => {
+        sentMessages.push({ chatId, text });
+        return { message_id: 1 };
+      },
     },
     reply: async (text: string) => {
       replies.push(text);
@@ -27,7 +33,7 @@ function fakeCtx(status: string, userId: number, opts: { answerCbQueryThrows?: b
       if (opts.answerCbQueryThrows) throw new Error('400: query is too old and response timeout expired');
     },
   };
-  return { ctx: ctx as unknown as Parameters<typeof showPersonalMenu>[0], replies };
+  return { ctx: ctx as unknown as Parameters<typeof showPersonalMenu>[0], replies, sentMessages };
 }
 
 test('showPersonalMenu refuses a non-member', async () => {
@@ -126,4 +132,64 @@ test('handleSubmitAction still prompts for a place when answerCbQuery rejects (s
   await handleSubmitAction(ctx);
 
   assert.equal(replies.some((r) => /Надішли посилання на заклад/.test(r)), true);
+});
+
+test('handleDeclineAction records a decline and shows it on the menu card, silently (nothing was submitted before)', async () => {
+  const userId = 11010;
+  const groupChatId = -10010;
+  setMenuMessage(userId, 999, 60, groupChatId);
+  const { ctx, replies, sentMessages } = fakeCtx('member', userId);
+
+  await handleDeclineAction(ctx);
+
+  assert.equal(getAllSubmissions(groupChatId)[0]?.status, 'declined');
+  assert.equal(replies.some((r) => /не йдеш/.test(r)), true);
+  assert.equal(sentMessages.length, 0); // nothing to retract, so the group hears nothing
+});
+
+test('handleDeclineAction announces to the group when it retracts an already-submitted place', async () => {
+  const userId = 11013;
+  const groupChatId = -10013;
+  submitPlace(groupChatId, userId, 'tester', 'https://www.instagram.com/somewhere');
+  setMenuMessage(userId, 999, 63, groupChatId);
+  const { ctx, sentMessages } = fakeCtx('member', userId);
+
+  await handleDeclineAction(ctx);
+
+  assert.equal(getAllSubmissions(groupChatId)[0]?.status, 'declined');
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].chatId, groupChatId);
+  assert.match(sentMessages[0].text, /не йде/);
+  assert.match(sentMessages[0].text, /somewhere/);
+});
+
+test('handleDeclineAction a second time cancels the decline and prompts for a place instead (no group announcement)', async () => {
+  const userId = 11011;
+  const groupChatId = -10011;
+  setMenuMessage(userId, 999, 61, groupChatId);
+
+  const first = fakeCtx('member', userId);
+  await handleDeclineAction(first.ctx);
+  assert.equal(getAllSubmissions(groupChatId)[0]?.status, 'declined');
+  assert.equal(first.sentMessages.length, 0);
+
+  const second = fakeCtx('member', userId);
+  await handleDeclineAction(second.ctx);
+  assert.equal(getAllSubmissions(groupChatId).length, 0);
+  assert.equal(second.sentMessages.length, 0);
+  assert.equal(getAwaitingChatId(userId), groupChatId); // went straight into the "add a place" prompt
+  assert.equal(second.replies.some((r) => /Куди хочеться/.test(r)), true);
+});
+
+test('handleDeclineAction refuses to record a decline for a blocked user', async () => {
+  const userId = 11012;
+  const groupChatId = -10012;
+  blockUserFromGroup(groupChatId, userId, 'tester', 999);
+  setMenuMessage(userId, 999, 62, groupChatId);
+  const { ctx, replies } = fakeCtx('member', userId);
+
+  await handleDeclineAction(ctx);
+
+  assert.equal(getAllSubmissions(groupChatId).length, 0);
+  assert.match(replies[0], /заблокували/);
 });

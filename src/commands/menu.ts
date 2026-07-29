@@ -1,12 +1,14 @@
 import type { Context } from 'telegraf';
+import { escapeHtml, placeLink } from '../htmlFormat.js';
 import { isChatMember } from './access.js';
 import { promptForPlace } from './add.js';
-import { buildMenuText, sendMenuMessage, SUBMIT_ACTION, updateMenuMessage } from './menuMessage.js';
+import { buildMenuKeyboard, buildMenuText, DECLINE_ACTION, sendMenuMessage, SUBMIT_ACTION, updateMenuMessage } from './menuMessage.js';
 import { safeAnswerCbQuery } from './panel.js';
-import { isGroupPaused, isSubmissionLocked, isUserBlocked } from '../services/submissionService.js';
+import { declinePlace, isGroupPaused, isSubmissionLocked, isUserBlocked } from '../services/submissionService.js';
 import { getMenuMessage } from '../storage/menuMessages.js';
+import { sendToChat } from '../telegramBroadcast.js';
 
-export { SUBMIT_ACTION };
+export { SUBMIT_ACTION, DECLINE_ACTION };
 
 // Exported so text.ts's rejection replies for the same two states reuse these literals instead of
 // retyping them — one string each, so wording can't drift between "opening the menu while
@@ -78,4 +80,49 @@ export async function handleSubmitAction(ctx: Context): Promise<void> {
   if (await renderGateIfBlocked(ctx, groupChatId, userId)) return;
 
   await promptForPlace(ctx, groupChatId);
+}
+
+// Toggles "не йду цього тижня" from the personal menu's second button.
+export async function handleDeclineAction(ctx: Context): Promise<void> {
+  if (ctx.callbackQuery) {
+    await safeAnswerCbQuery(ctx);
+  }
+
+  const userId = ctx.from?.id;
+  const groupChatId = userId !== undefined ? getMenuMessage(userId)?.groupChatId : undefined;
+  if (!userId || groupChatId === undefined) return;
+
+  if (!(await isChatMember(ctx, groupChatId, userId))) {
+    await ctx.reply('🔒 Здається, ти вже не в цій групі.');
+    return;
+  }
+
+  if (await renderGateIfBlocked(ctx, groupChatId, userId)) return;
+
+  const username = ctx.from?.username ?? ctx.from?.first_name ?? 'Хтось';
+  const result = declinePlace(groupChatId, userId, username);
+
+  if (result.ok && !result.declined) {
+    // Cancelling "не йду" means the user is coming after all and has no place submitted either
+    // (declining always drops any previous place) — go straight into the same "send me a link"
+    // prompt as SUBMIT_ACTION rather than back to an idle menu, since a place is exactly what's
+    // missing now. The eventual submitPlace() call announces it to the group as a normal, fresh
+    // submission — no separate announcement needed for the cancel itself.
+    await promptForPlace(ctx, groupChatId);
+    return;
+  }
+
+  if (result.ok && result.previousPlace !== undefined) {
+    // Declining overwrote a place the group already saw announced — tell the group it's been
+    // retracted. A decline with nothing to retract (result.previousPlace undefined) stays silent:
+    // the group was never told about this user in the first place, so there's nothing to correct.
+    await sendToChat(
+      ctx.telegram,
+      groupChatId,
+      `🙅 <b>${escapeHtml(username)}</b> цього тижня не йде (варіант знято: ${placeLink(result.previousPlace)})`,
+      { parse_mode: 'HTML' },
+    );
+  }
+
+  await updateMenuMessage(ctx, groupChatId, userId, buildMenuText(groupChatId, userId), buildMenuKeyboard(groupChatId, userId));
 }
