@@ -4,6 +4,7 @@ import { isLocked, lock, unlock } from '../storage/lockState.js';
 import { isPaused, pause, resume } from '../storage/pauseState.js';
 import { msSinceLastSubmit, recordSubmitTime } from '../storage/rateLimit.js';
 import {
+  addDecline,
   addSubmission,
   clearSubmissions,
   getSubmission,
@@ -64,7 +65,10 @@ export function submitPlace(chatId: number, userId: number, username: string, pl
     return { ok: false, reason: 'invalid_format' };
   }
 
-  const previousPlace = getSubmission(chatId, userId)?.place;
+  const existing = getSubmission(chatId, userId);
+  // Only a real prior place counts as "previous" — a 'declined' row's place is the empty-string
+  // placeholder, not an actual place to show a "було: ..." diff against or match for dedup.
+  const previousPlace = existing?.status === 'submitted' ? existing.place : undefined;
   if (previousPlace === place) {
     return { ok: false, reason: 'duplicate' };
   }
@@ -76,6 +80,40 @@ export function submitPlace(chatId: number, userId: number, username: string, pl
   addSubmission(chatId, userId, username, place);
   recordSubmitTime(chatId, userId);
   return { ok: true, previousPlace };
+}
+
+export type DeclineResult =
+  // previousPlace is set only when declining actually retracted a real place submission — the
+  // caller uses that (and only that) to decide whether the group needs to be told, since a
+  // decline that had nothing to retract is a no-op from the group's point of view.
+  | { ok: true; declined: boolean; previousPlace?: string }
+  | { ok: false; reason: 'locked' | 'paused' | 'blocked' };
+
+// Toggles "не йду цього тижня" — mutually exclusive with an actual place submission, since it
+// shares the same (chatId, userId) row: declining overwrites any existing place the same way
+// resubmitting a place overwrites a previous decline. Declining a second time cancels it back to
+// no response at all, since there's no separate "cancel" affordance in the menu.
+export function declinePlace(chatId: number, userId: number, username: string): DeclineResult {
+  if (isBlocked(chatId, userId)) {
+    return { ok: false, reason: 'blocked' };
+  }
+
+  if (isPaused(chatId)) {
+    return { ok: false, reason: 'paused' };
+  }
+
+  if (isLocked(chatId)) {
+    return { ok: false, reason: 'locked' };
+  }
+
+  const existing = getSubmission(chatId, userId);
+  if (existing?.status === 'declined') {
+    removeSubmission(chatId, userId);
+    return { ok: true, declined: false };
+  }
+
+  addDecline(chatId, userId, username);
+  return { ok: true, declined: true, previousPlace: existing?.status === 'submitted' ? existing.place : undefined };
 }
 
 export function getAllSubmissions(chatId: number): Submission[] {
@@ -132,12 +170,14 @@ export function listBlockedUsersInGroup(chatId: number): BlockedUser[] {
   return listBlockedUsers(chatId);
 }
 
+// Only counts actual place proposals — a 'declined' row is a considered response, not a candidate
+// for the draw.
 export function pickWeeklyWinner(chatId: number): Submission | undefined {
-  const submissions = listSubmissions(chatId);
-  if (submissions.length === 0) return undefined;
+  const candidates = listSubmissions(chatId).filter((s) => s.status === 'submitted');
+  if (candidates.length === 0) return undefined;
 
-  const index = Math.floor(Math.random() * submissions.length);
-  return submissions[index];
+  const index = Math.floor(Math.random() * candidates.length);
+  return candidates[index];
 }
 
 export function resetWeek(chatId: number): void {
@@ -146,5 +186,9 @@ export function resetWeek(chatId: number): void {
 }
 
 export function recordDraw(chatId: number, winner: Submission | undefined): void {
-  persistDraw({ chatId, drawnAt: Date.now(), winner, submissions: listSubmissions(chatId) });
+  // History only ever records actual place proposals, same reasoning as pickWeeklyWinner above —
+  // a decliner has never proposed a place, so they shouldn't show up in historical "who submits
+  // most"/getHistoricalSubmitters analytics.
+  const placeSubmissions = listSubmissions(chatId).filter((s) => s.status === 'submitted');
+  persistDraw({ chatId, drawnAt: Date.now(), winner, submissions: placeSubmissions });
 }

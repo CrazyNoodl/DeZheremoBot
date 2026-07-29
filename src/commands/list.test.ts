@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { showSubmissionsList } from './list.js';
+import { declinePlace, submitPlace } from '../services/submissionService.js';
 
 function fakeCtx(status: string, userId: number) {
   const replies: string[] = [];
@@ -45,4 +46,16 @@ test('showSubmissionsList replies with the list for an actual member', async () 
 
   assert.equal(replies.length, 1);
   assert.doesNotMatch(replies[0], /не в цій групі/);
+});
+
+test('showSubmissionsList renders a decliner distinctly from a place submission', async () => {
+  const chatId = -11004;
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/somewhere');
+  declinePlace(chatId, 2, 'olya');
+  const { ctx, replies } = fakeCtx('member', 12004);
+
+  await showSubmissionsList(ctx, chatId);
+
+  assert.match(replies[0], /artem.*somewhere/s);
+  assert.match(replies[0], /olya.*не йде цього тижня/s);
 });

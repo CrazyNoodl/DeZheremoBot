@@ -25,11 +25,12 @@ const ADMIN_PANEL_TTL_MS = 48 * 60 * 60 * 1000;
 
 const panel = createPanel(ADMIN_PANEL_TTL_MS, 'admin');
 
-function buildPanelText(paused: boolean, submissionCount: number, locked: boolean, blockedCount: number): string {
+function buildPanelText(paused: boolean, placeCount: number, declineCount: number, locked: boolean, blockedCount: number): string {
   return (
     (paused ? '⏸ Цикл призупинено — нагадування, закриття заявок і розіграш не виконуються\n\n' : '') +
     `🛠 Керування циклом цієї групи\n\n` +
-    `📝 Подано заявок цього тижня: ${submissionCount}${locked ? ' (прийом закрито)' : ''}` +
+    `📝 Подано заявок цього тижня: ${placeCount}${declineCount > 0 ? ` (+ ${declineCount} не йдуть)` : ''}` +
+    `${locked ? ' (прийом закрито)' : ''}` +
     (blockedCount > 0 ? `\n🚫 Заблоковано користувачів: ${blockedCount}` : '')
   );
 }
@@ -65,18 +66,24 @@ function buildBlocklistText(chatId: number): string {
     (blocked.length > 0
       ? `Заблоковані:\n${blocked.map((b) => `• ${displayName(b.username, b.userId)}`).join('\n')}`
       : 'Наразі нікого не заблоковано.') +
-    `\n\nБлокувати можна серед тих, хто подав заявку цього тижня — натисни на ім'я нижче.`
+    `\n\nБлокувати можна серед тих, хто відповів цього тижня — натисни на ім'я нижче.`
   );
 }
 
-// Only current-week submitters can be offered for blocking here: there is no persistent
-// directory of everyone who's ever used the bot, just this week's submissions table.
+// Only this week's responders (place submitted or "не йду") can be offered for blocking here:
+// there is no persistent directory of everyone who's ever used the bot, just this week's
+// submissions table.
 function buildBlocklistKeyboard(chatId: number) {
   const blocked = listBlockedUsersInGroup(chatId);
   const blockedIds = new Set(blocked.map((b) => b.userId));
   const rows = getAllSubmissions(chatId)
     .filter((s) => !blockedIds.has(s.userId))
-    .map((s) => [Markup.button.callback(`🚫 ${displayName(s.username, s.userId)}`, `admin:block:${chatId}:${s.userId}`)]);
+    .map((s) => [
+      Markup.button.callback(
+        `🚫 ${displayName(s.username, s.userId)}${s.status === 'declined' ? ' (не йде)' : ''}`,
+        `admin:block:${chatId}:${s.userId}`,
+      ),
+    ]);
   blocked.forEach((b) => {
     rows.push([
       Markup.button.callback(`✅ Розблокувати ${displayName(b.username, b.userId)}`, `admin:unblock:${chatId}:${b.userId}`),
@@ -91,15 +98,13 @@ async function renderBlocklistPanel(ctx: Context, userId: number, chatId: number
 }
 
 async function renderAdminPanel(ctx: Context, userId: number, chatId: number): Promise<void> {
+  const submissions = getAllSubmissions(chatId);
+  const placeCount = submissions.filter((s) => s.status === 'submitted').length;
+  const declineCount = submissions.filter((s) => s.status === 'declined').length;
   await panel.update(
     ctx,
     userId,
-    buildPanelText(
-      isGroupPaused(chatId),
-      getAllSubmissions(chatId).length,
-      isSubmissionLocked(chatId),
-      listBlockedUsersInGroup(chatId).length,
-    ),
+    buildPanelText(isGroupPaused(chatId), placeCount, declineCount, isSubmissionLocked(chatId), listBlockedUsersInGroup(chatId).length),
     buildPanelKeyboard(chatId),
   );
 }

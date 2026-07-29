@@ -4,7 +4,7 @@ import { handleAdminAction, handleAdminCommand } from './commands/admin.js';
 import { handleMyChatMember, handleNewChatTitle } from './commands/groupChat.js';
 import { buildGroupMenu, START_ADD_PREFIX, START_LIST_PREFIX } from './commands/keyboard.js';
 import { showSubmissionsList } from './commands/list.js';
-import { handleSubmitAction, showPersonalMenu, SUBMIT_ACTION } from './commands/menu.js';
+import { DECLINE_ACTION, handleDeclineAction, handleSubmitAction, showPersonalMenu, SUBMIT_ACTION } from './commands/menu.js';
 import { handleScheduleAction, handleScheduleCommand } from './commands/schedule.js';
 import { handleTextMessage } from './commands/text.js';
 import { startScheduler } from './scheduler.js';
@@ -38,6 +38,7 @@ bot.start(async (ctx) => {
 bot.on('my_chat_member', handleMyChatMember);
 bot.on('new_chat_title', handleNewChatTitle);
 bot.action(SUBMIT_ACTION, handleSubmitAction);
+bot.action(DECLINE_ACTION, handleDeclineAction);
 bot.action(/^sched:/, handleScheduleAction);
 bot.command('schedule', handleScheduleCommand);
 bot.action(/^admin:/, handleAdminAction);

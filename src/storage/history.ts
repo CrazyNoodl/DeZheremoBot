@@ -1,7 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Submission } from './store.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 // Same test-isolation override as storage/db.ts — see the comment there.
@@ -42,11 +41,20 @@ const insertSubmissionStmt = db.prepare(`
   VALUES (?, ?, ?, ?, ?)
 `);
 
+// Deliberately its own shape rather than reusing storage/store.ts's Submission: history only ever
+// records actual place proposals (submissionService.ts's recordDraw filters out 'declined' rows
+// before calling this), so it has no reason to know about submission status at all.
+export interface HistorySubmission {
+  userId: number;
+  username: string;
+  place: string;
+}
+
 export interface DrawRecord {
   chatId: number;
   drawnAt: number;
-  winner: Submission | undefined;
-  submissions: Submission[];
+  winner: HistorySubmission | undefined;
+  submissions: HistorySubmission[];
 }
 
 // submissions_history has no chat_id of its own — chat_id lives on the weekly_draws row it

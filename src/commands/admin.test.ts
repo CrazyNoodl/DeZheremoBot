@@ -10,6 +10,7 @@ import type { Context } from 'telegraf';
 process.env.DEZHEREMO_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'dzb-admin-cmd-'));
 const { handleAdminAction } = await import('./admin.js');
 const {
+  declinePlace,
   getAllSubmissions,
   isGroupPaused,
   isSubmissionLocked,
@@ -226,6 +227,35 @@ test('handleAdminAction "unblock" reverses "block" and lets the target submit ag
   t.mock.timers.tick(10_001); // past the resubmit cooldown, otherwise this looks rate_limited
   const result = submitPlace(chatId, targetUserId, 'artem', 'https://www.instagram.com/somewhere');
   assert.equal(result.ok, true);
+});
+
+test('handleAdminAction "draw" excludes a decliner from the pool but still clears their decline', async () => {
+  const userId = 30014;
+  const chatId = -30014;
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/somewhere');
+  declinePlace(chatId, 2, 'olya');
+
+  const { ctx, rawCtx, sentMessages } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:draw:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(sentMessages.length, 1);
+  assert.match(sentMessages[0].text, /artem/);
+  assert.equal(getAllSubmissions(chatId).length, 0);
+});
+
+test('handleAdminAction "block" can block a user who only declined this week, dropping their decline', async () => {
+  const userId = 30015;
+  const chatId = -30015;
+  const targetUserId = 2;
+  declinePlace(chatId, targetUserId, 'olya');
+
+  const { ctx, rawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:block:${chatId}:${targetUserId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(isUserBlocked(chatId, targetUserId), true);
+  assert.equal(getAllSubmissions(chatId).length, 0);
 });
 
 test('handleAdminAction refuses "blocklist" for a user who is no longer an admin', async () => {
