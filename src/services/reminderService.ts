@@ -1,3 +1,4 @@
+import { listBlockedUsersInGroup } from './submissionService.js';
 import { getHistoricalSubmitters, type HistoricalSubmitter } from '../storage/history.js';
 import { listSubmissions } from '../storage/store.js';
 
@@ -16,8 +17,12 @@ export function getNonSubmittersInfo(chatId: number, totalMembers: number): NonS
   const historical = getHistoricalSubmitters(chatId);
   const current = listSubmissions(chatId);
   const currentIds = new Set(current.map((s) => s.userId));
+  // A blocked user can never submit this week no matter how long it goes on, so nudging them by
+  // name every final reminder would be actively wrong — but they're still a known, accounted-for
+  // member (they still count toward knownIds below), just not someone to tag.
+  const blockedIds = new Set(listBlockedUsersInGroup(chatId).map((b) => b.userId));
 
-  const nonSubmitters = historical.filter((u) => !currentIds.has(u.userId));
+  const nonSubmitters = historical.filter((u) => !currentIds.has(u.userId) && !blockedIds.has(u.userId));
 
   const knownIds = new Set([...historical.map((u) => u.userId), ...currentIds]);
   // -1 excludes the bot itself, which getChatMembersCount counts as a member.

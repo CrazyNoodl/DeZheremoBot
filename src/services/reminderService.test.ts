@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { recordDraw } from '../storage/history.js';
 import { addSubmission } from '../storage/store.js';
 import { getNonSubmittersInfo } from './reminderService.js';
+import { blockUserFromGroup } from './submissionService.js';
 
 test('getNonSubmittersInfo lists past submitters who have not submitted this week', () => {
   recordDraw({
@@ -45,6 +46,25 @@ test('getNonSubmittersInfo treats this week\'s first-time submitters as known, n
   const { nonSubmitters, unknownCount } = getNonSubmittersInfo(-6003, 2);
 
   assert.deepEqual(nonSubmitters, []);
+  assert.equal(unknownCount, 0);
+});
+
+test('getNonSubmittersInfo excludes a blocked user from the tag list but still counts them as known', () => {
+  recordDraw({
+    chatId: -6005,
+    drawnAt: 1_700_000_000_000,
+    winner: undefined,
+    submissions: [
+      { userId: 1, username: 'artem', place: 'A' },
+      { userId: 2, username: 'olya', place: 'B' },
+    ],
+  });
+  blockUserFromGroup(-6005, 2, 'olya', 999); // can never submit again, shouldn't be nudged forever
+
+  // 3 total: bot + 2 historical submitters, both still known -> nobody unknown.
+  const { nonSubmitters, unknownCount } = getNonSubmittersInfo(-6005, 3);
+
+  assert.deepEqual(nonSubmitters, [{ userId: 1, username: 'artem' }]);
   assert.equal(unknownCount, 0);
 });
 
