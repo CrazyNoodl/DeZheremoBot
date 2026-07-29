@@ -5,6 +5,7 @@ import { MAX_PLACE_LENGTH, submitPlace } from '../services/submissionService.js'
 import { sendToChat } from '../telegramBroadcast.js';
 import { PLACE_LINK_FORMAT_HINT } from './add.js';
 import { buildMenuKeyboard, buildMenuText, updateMenuMessage } from './menuMessage.js';
+import { BLOCKED_MESSAGE, PAUSED_MESSAGE } from './menu.js';
 import { handleScheduleTextStep } from './schedule.js';
 
 export async function handleTextMessage(ctx: Context): Promise<void> {
@@ -46,9 +47,9 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
       result.reason === 'locked'
         ? '🔒 Запізно — заявки на цей тиждень уже закрито. До зустрічі наступного тижня!'
         : result.reason === 'paused'
-          ? '⏸ Цього тижня ДеЖеремо на паузі — заявки поки не приймаються. Скоро повернемось!'
+          ? PAUSED_MESSAGE
           : result.reason === 'blocked'
-            ? '🚫 Тебе заблокували в цій групі — додавати заявки більше не можна.'
+            ? BLOCKED_MESSAGE
             : `Це вже твій поточний варіант — міняти нічого 😉\n\n${buildMenuText(chatId, userId)}`;
     const keyboard =
       result.reason === 'locked' || result.reason === 'paused' || result.reason === 'blocked'

@@ -1,12 +1,6 @@
-import { Markup, TelegramError, type Context } from 'telegraf';
+import { Markup, type Context } from 'telegraf';
 import { buildDrawAnnouncement } from '../announcements.js';
-import { findAdminGroupChats, isGroupAdmin } from './access.js';
-import { getGroupChatTitle } from '../storage/groupChats.js';
-import {
-  clearAdminMenuMessage,
-  getAdminMenuMessage,
-  setAdminMenuMessage,
-} from '../storage/adminMenuMessages.js';
+import { handleAdminEntryCommand, isGroupAdmin, showGatedMenu } from './access.js';
 import { getKyivNow } from '../kyivTime.js';
 import {
   blockUserFromGroup,
@@ -24,9 +18,12 @@ import {
 } from '../services/submissionService.js';
 import { markFired } from '../storage/firedEvents.js';
 import { sendToChat } from '../telegramBroadcast.js';
+import { createPanel, safeAnswerCbQuery } from './panel.js';
 
 // Same 48h reasoning as MENU_MESSAGE_TTL_MS in menuMessage.ts / SCHEDULE_PANEL_TTL_MS in schedule.ts.
 const ADMIN_PANEL_TTL_MS = 48 * 60 * 60 * 1000;
+
+const panel = createPanel(ADMIN_PANEL_TTL_MS, 'admin');
 
 function buildPanelText(paused: boolean, submissionCount: number, locked: boolean, blockedCount: number): string {
   return (
@@ -90,70 +87,11 @@ function buildBlocklistKeyboard(chatId: number) {
 }
 
 async function renderBlocklistPanel(ctx: Context, userId: number, chatId: number): Promise<void> {
-  await updateAdminPanel(ctx, userId, buildBlocklistText(chatId), buildBlocklistKeyboard(chatId));
-}
-
-function trackAdminPanel(ctx: Context, userId: number, chatId: number, messageId: number): void {
-  setAdminMenuMessage(userId, chatId, messageId);
-  setTimeout(() => {
-    const ref = getAdminMenuMessage(userId);
-    if (ref?.messageId !== messageId) return; // superseded by a newer panel message already
-    clearAdminMenuMessage(userId);
-    ctx.telegram.deleteMessage(chatId, messageId).catch(() => {});
-  }, ADMIN_PANEL_TTL_MS);
-}
-
-async function sendAdminPanel(
-  ctx: Context,
-  userId: number,
-  text: string,
-  keyboard: ReturnType<typeof Markup.inlineKeyboard>,
-): Promise<void> {
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-
-  const sent = await ctx.reply(text, keyboard);
-  trackAdminPanel(ctx, userId, chatId, sent.message_id);
-}
-
-async function updateAdminPanel(
-  ctx: Context,
-  userId: number,
-  text: string,
-  keyboard: ReturnType<typeof Markup.inlineKeyboard>,
-): Promise<void> {
-  const ref = getAdminMenuMessage(userId);
-
-  if (ref) {
-    try {
-      await ctx.telegram.editMessageText(ref.chatId, ref.messageId, undefined, text, keyboard);
-      return;
-    } catch (err) {
-      // Telegram rejects an edit whose text+keyboard exactly match the current message —
-      // that's a no-op, not a failure, so don't fall through to sending a duplicate.
-      if (err instanceof TelegramError && err.description?.includes('message is not modified')) {
-        return;
-      }
-      console.warn(`[admin] panel edit failed for user ${userId}, sending a fresh message instead:`, err);
-    }
-  }
-
-  await sendAdminPanel(ctx, userId, text, keyboard);
-}
-
-// A callback query can go stale (old message, or already answered) between the button being
-// pressed and this running — Telegram then rejects answerCbQuery with a 400, which must not be
-// allowed to crash the whole bot process.
-async function safeAnswerCbQuery(ctx: Context, text?: string, extra?: { show_alert?: boolean }): Promise<void> {
-  try {
-    await ctx.answerCbQuery(text, extra);
-  } catch {
-    // stale callback query — nothing to do
-  }
+  await panel.update(ctx, userId, buildBlocklistText(chatId), buildBlocklistKeyboard(chatId));
 }
 
 async function renderAdminPanel(ctx: Context, userId: number, chatId: number): Promise<void> {
-  await updateAdminPanel(
+  await panel.update(
     ctx,
     userId,
     buildPanelText(
@@ -167,55 +105,28 @@ async function renderAdminPanel(ctx: Context, userId: number, chatId: number): P
 }
 
 export async function showAdminMenu(ctx: Context, chatId: number): Promise<void> {
-  const userId = ctx.from?.id;
-  if (!userId) return;
-
-  let admin: boolean;
-  try {
-    admin = await isGroupAdmin(ctx, chatId, userId);
-  } catch {
-    await ctx.reply('⚠️ Не вдалося перевірити права доступу для цієї групи.');
-    return;
-  }
-
-  if (!admin) {
-    await ctx.reply('🔒 Лише адміни групи можуть керувати циклом.');
-    return;
-  }
-
-  await renderAdminPanel(ctx, userId, chatId);
-}
-
-function buildGroupPickerKeyboard(chatIds: number[]) {
-  return Markup.inlineKeyboard(
-    chatIds.map((chatId) => [
-      Markup.button.callback(getGroupChatTitle(chatId) || `Група ${chatId}`, `admin:select:${chatId}`),
-    ]),
+  await showGatedMenu(
+    ctx,
+    chatId,
+    {
+      checkFailed: '⚠️ Не вдалося перевірити права доступу для цієї групи.',
+      notAdmin: '🔒 Лише адміни групи можуть керувати циклом.',
+    },
+    renderAdminPanel,
   );
 }
 
 export async function handleAdminCommand(ctx: Context): Promise<void> {
-  if (ctx.chat?.type !== 'private') {
-    await ctx.reply('🛠 Керувати циклом можна лише у приватному чаті з ботом — напиши мені /admin тут.');
-    return;
-  }
-
-  const userId = ctx.from?.id;
-  if (!userId) return;
-
-  const adminChatIds = await findAdminGroupChats(ctx, userId);
-
-  if (adminChatIds.length === 0) {
-    await ctx.reply('🔒 Ти не адміністратор жодної групи, де я є.');
-    return;
-  }
-
-  if (adminChatIds.length === 1) {
-    await showAdminMenu(ctx, adminChatIds[0]);
-    return;
-  }
-
-  await ctx.reply('Обери групу, циклом якої хочеш керувати:', buildGroupPickerKeyboard(adminChatIds));
+  await handleAdminEntryCommand(
+    ctx,
+    'admin',
+    {
+      notPrivate: '🛠 Керувати циклом можна лише у приватному чаті з ботом — напиши мені /admin тут.',
+      noAdminGroups: '🔒 Ти не адміністратор жодної групи, де я є.',
+      pickGroup: 'Обери групу, циклом якої хочеш керувати:',
+    },
+    showAdminMenu,
+  );
 }
 
 export async function handleAdminAction(ctx: Context): Promise<void> {
@@ -247,7 +158,7 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
 
   if (action === 'select') {
     const message = query && 'message' in query ? query.message : undefined;
-    if (message) trackAdminPanel(ctx, userId, message.chat.id, message.message_id);
+    if (message) panel.track(ctx, userId, message.chat.id, message.message_id);
     await renderAdminPanel(ctx, userId, chatId);
     return;
   }

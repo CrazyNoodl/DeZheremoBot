@@ -1,19 +1,19 @@
-interface MenuMessageRef {
-  chatId: number; // private chat where the card lives
-  messageId: number;
+import { createPanelMessageStore, type PanelMessageRef } from './panelMessages.js';
+
+export interface MenuMessageRef extends PanelMessageRef {
   groupChatId: number; // which group's cycle this card currently represents
 }
 
-const menuMessages = new Map<number, MenuMessageRef>();
+const store = createPanelMessageStore<MenuMessageRef>();
 
 export function setMenuMessage(userId: number, chatId: number, messageId: number, groupChatId: number): void {
-  menuMessages.set(userId, { chatId, messageId, groupChatId });
+  store.set(userId, { chatId, messageId, groupChatId });
 }
 
 export function getMenuMessage(userId: number): MenuMessageRef | undefined {
-  return menuMessages.get(userId);
+  return store.get(userId);
 }
 
 export function clearMenuMessage(userId: number): void {
-  menuMessages.delete(userId);
+  store.clear(userId);
 }

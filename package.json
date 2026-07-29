@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/bot.ts",
-    "build": "tsc",
+    "build": "tsc && find dist -name '*.test.js' -delete",
     "start": "node dist/bot.js",
     "test": "DEZHEREMO_STATE_DB=:memory: DEZHEREMO_HISTORY_DB=:memory: tsx --test --test-force-exit 'src/**/*.test.ts'"
   },
