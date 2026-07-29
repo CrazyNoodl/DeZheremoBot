@@ -1,4 +1,4 @@
-import { Markup, TelegramError, type Context } from 'telegraf';
+import { Markup, type Context } from 'telegraf';
 import { getKyivNow } from '../kyivTime.js';
 import { sendTaggedReminder } from '../scheduler.js';
 import {
@@ -17,16 +17,13 @@ import {
   setScheduleEditState,
   type ScheduleEditState,
 } from '../storage/scheduleEditState.js';
-import {
-  clearScheduleMenuMessage,
-  getScheduleMenuMessage,
-  setScheduleMenuMessage,
-} from '../storage/scheduleMenuMessages.js';
-import { findAdminGroupChats, isGroupAdmin } from './access.js';
-import { getGroupChatTitle } from '../storage/groupChats.js';
+import { handleAdminEntryCommand, isGroupAdmin, showGatedMenu } from './access.js';
+import { createPanel, safeAnswerCbQuery } from './panel.js';
 
 // Same 48h reasoning as MENU_MESSAGE_TTL_MS in menuMessage.ts: past this, Telegram refuses to edit the message.
 const SCHEDULE_PANEL_TTL_MS = 48 * 60 * 60 * 1000;
+
+const panel = createPanel(SCHEDULE_PANEL_TTL_MS, 'schedule');
 
 const WEEKDAY_LABELS = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
@@ -86,130 +83,42 @@ function buildWeekdaySingleSelectKeyboard() {
   return Markup.inlineKeyboard([buttons.slice(0, 4), buttons.slice(4), [Markup.button.callback('⬅️ Назад', 'sched:back')]]);
 }
 
-function trackSchedulePanel(ctx: Context, userId: number, chatId: number, messageId: number): void {
-  setScheduleMenuMessage(userId, chatId, messageId);
-  setTimeout(() => {
-    const ref = getScheduleMenuMessage(userId);
-    if (ref?.messageId !== messageId) return; // superseded by a newer panel message already
-    clearScheduleMenuMessage(userId);
-    ctx.telegram.deleteMessage(chatId, messageId).catch(() => {});
-  }, SCHEDULE_PANEL_TTL_MS);
-}
-
-async function sendSchedulePanel(
-  ctx: Context,
-  userId: number,
-  text: string,
-  keyboard: ReturnType<typeof Markup.inlineKeyboard>,
-): Promise<void> {
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-
-  const sent = await ctx.reply(text, keyboard);
-  trackSchedulePanel(ctx, userId, chatId, sent.message_id);
-}
-
-async function updateSchedulePanel(
-  ctx: Context,
-  userId: number,
-  text: string,
-  keyboard: ReturnType<typeof Markup.inlineKeyboard> = Markup.inlineKeyboard([]),
-): Promise<void> {
-  const ref = getScheduleMenuMessage(userId);
-
-  if (ref) {
-    try {
-      await ctx.telegram.editMessageText(ref.chatId, ref.messageId, undefined, text, keyboard);
-      return;
-    } catch (err) {
-      // Telegram rejects an edit whose text+keyboard exactly match the current message —
-      // that's a no-op, not a failure, so don't fall through to sending a duplicate.
-      if (err instanceof TelegramError && err.description?.includes('message is not modified')) {
-        return;
-      }
-      // too old to edit or deleted — fall through to a fresh message. Logged at warn rather than
-      // error: expected to happen occasionally, but a spike would otherwise be invisible.
-      console.warn(`[schedule] panel edit failed for user ${userId}, sending a fresh message instead:`, err);
-    }
-  }
-
-  await sendSchedulePanel(ctx, userId, text, keyboard);
-}
-
-// A callback query can go stale (old message, or already answered) between the button being
-// pressed and this running — Telegram then rejects answerCbQuery with a 400, which must not be
-// allowed to crash the whole bot process.
-async function safeAnswerCbQuery(ctx: Context, text?: string, extra?: { show_alert?: boolean }): Promise<void> {
-  try {
-    await ctx.answerCbQuery(text, extra);
-  } catch {
-    // stale callback query — nothing to do
-  }
-}
-
 async function renderSummary(ctx: Context, userId: number, chatId: number): Promise<void> {
   clearScheduleEditState(userId);
-  await updateSchedulePanel(ctx, userId, buildSummaryText(getSchedule(chatId)), buildSummaryKeyboard(chatId));
+  await panel.update(ctx, userId, buildSummaryText(getSchedule(chatId)), buildSummaryKeyboard(chatId));
 }
 
 async function renderWeekdayToggleScreen(ctx: Context, userId: number, selected: Set<number>): Promise<void> {
-  await updateSchedulePanel(ctx, userId, 'Обери дні нагадувань:', buildWeekdayToggleKeyboard(selected));
+  await panel.update(ctx, userId, 'Обери дні нагадувань:', buildWeekdayToggleKeyboard(selected));
 }
 
 async function renderDeadlineWeekdayScreen(ctx: Context, userId: number): Promise<void> {
-  await updateSchedulePanel(ctx, userId, 'Обери день дедлайну (закриття заявок + жеребкування):', buildWeekdaySingleSelectKeyboard());
+  await panel.update(ctx, userId, 'Обери день дедлайну (закриття заявок + жеребкування):', buildWeekdaySingleSelectKeyboard());
 }
 
 export async function showScheduleMenu(ctx: Context, chatId: number): Promise<void> {
-  const userId = ctx.from?.id;
-  if (!userId) return;
-
-  let admin: boolean;
-  try {
-    admin = await isGroupAdmin(ctx, chatId, userId);
-  } catch {
-    await ctx.reply('⚠️ Не вдалося перевірити права доступу для цієї групи.');
-    return;
-  }
-
-  if (!admin) {
-    await ctx.reply('🔒 Лише адміни групи можуть змінювати розклад.');
-    return;
-  }
-
-  await renderSummary(ctx, userId, chatId);
-}
-
-function buildGroupPickerKeyboard(chatIds: number[]) {
-  return Markup.inlineKeyboard(
-    chatIds.map((chatId) => [
-      Markup.button.callback(getGroupChatTitle(chatId) || `Група ${chatId}`, `sched:select:${chatId}`),
-    ]),
+  await showGatedMenu(
+    ctx,
+    chatId,
+    {
+      checkFailed: '⚠️ Не вдалося перевірити права доступу для цієї групи.',
+      notAdmin: '🔒 Лише адміни групи можуть змінювати розклад.',
+    },
+    renderSummary,
   );
 }
 
 export async function handleScheduleCommand(ctx: Context): Promise<void> {
-  if (ctx.chat?.type !== 'private') {
-    await ctx.reply('⚙️ Розклад можна змінити лише у приватному чаті з ботом — напиши мені /schedule тут.');
-    return;
-  }
-
-  const userId = ctx.from?.id;
-  if (!userId) return;
-
-  const adminChatIds = await findAdminGroupChats(ctx, userId);
-
-  if (adminChatIds.length === 0) {
-    await ctx.reply('🔒 Ти не адміністратор жодної групи, де я є.');
-    return;
-  }
-
-  if (adminChatIds.length === 1) {
-    await showScheduleMenu(ctx, adminChatIds[0]);
-    return;
-  }
-
-  await ctx.reply('Обери групу, розклад якої хочеш змінити:', buildGroupPickerKeyboard(adminChatIds));
+  await handleAdminEntryCommand(
+    ctx,
+    'sched',
+    {
+      notPrivate: '⚙️ Розклад можна змінити лише у приватному чаті з ботом — напиши мені /schedule тут.',
+      noAdminGroups: '🔒 Ти не адміністратор жодної групи, де я є.',
+      pickGroup: 'Обери групу, розклад якої хочеш змінити:',
+    },
+    showScheduleMenu,
+  );
 }
 
 export async function handleScheduleAction(ctx: Context): Promise<void> {
@@ -260,7 +169,7 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
   if (action === 'select') {
     const chatId = Number(arg);
     const message = query && 'message' in query ? query.message : undefined;
-    if (message) trackSchedulePanel(ctx, userId, message.chat.id, message.message_id);
+    if (message) panel.track(ctx, userId, message.chat.id, message.message_id);
     await renderSummary(ctx, userId, chatId);
     return;
   }
@@ -321,7 +230,7 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
 
     if (state.flow === 'deadline' && state.step === 'weekday') {
       setScheduleEditStateWithTTL(userId, { flow: 'deadline', step: 'lockTime', chatId: state.chatId, weekday: day });
-      await updateSchedulePanel(
+      await panel.update(
         ctx,
         userId,
         'Введи час закриття прийому заявок (lock) у форматі ГГ:ХХ, напр. 18:00',
@@ -338,7 +247,7 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
 
     const weekdays = Array.from(state.selected);
     setScheduleEditStateWithTTL(userId, { flow: 'reminder', step: 'time', chatId: state.chatId, weekdays });
-    await updateSchedulePanel(ctx, userId, 'Введи час нагадувань у форматі ГГ:ХХ, напр. 10:00', CANCEL_KEYBOARD);
+    await panel.update(ctx, userId, 'Введи час нагадувань у форматі ГГ:ХХ, напр. 10:00', CANCEL_KEYBOARD);
     return;
   }
 }
@@ -357,7 +266,7 @@ function reportTimeResult(
         : result.reason === 'reminder_after_lock'
           ? '⚠️ Нагадування випадає в день дедлайну після закриття заявок (lock) — постав раніше.'
           : '⚠️ Невірний формат. Введи час у форматі ГГ:ХХ.';
-    return updateSchedulePanel(ctx, userId, `${error}\n\n${reprompt}`, CANCEL_KEYBOARD);
+    return panel.update(ctx, userId, `${error}\n\n${reprompt}`, CANCEL_KEYBOARD);
   }
 
   return renderSummary(ctx, userId, chatId);
@@ -384,7 +293,7 @@ export async function handleScheduleTextStep(ctx: Context, userId: number, text:
 
   if (state.flow === 'deadline' && state.step === 'lockTime') {
     if (!isValidTime(text)) {
-      await updateSchedulePanel(
+      await panel.update(
         ctx,
         userId,
         '⚠️ Невірний формат. Введи час закриття заявок у форматі ГГ:ХХ, напр. 18:00',
@@ -394,7 +303,7 @@ export async function handleScheduleTextStep(ctx: Context, userId: number, text:
     }
 
     setScheduleEditStateWithTTL(userId, { flow: 'deadline', step: 'drawTime', chatId: state.chatId, weekday: state.weekday, lockTime: text });
-    await updateSchedulePanel(ctx, userId, 'Введи час жеребкування (draw) у форматі ГГ:ХХ, напр. 18:15', CANCEL_KEYBOARD);
+    await panel.update(ctx, userId, 'Введи час жеребкування (draw) у форматі ГГ:ХХ, напр. 18:15', CANCEL_KEYBOARD);
     return true;
   }
 
