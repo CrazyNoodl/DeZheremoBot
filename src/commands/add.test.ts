@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Context } from 'telegraf';
-import { promptForPlace } from './add.js';
+import { handleCancelAwaitingAction, promptForPlace } from './add.js';
 import { clearAwaitingSubmission, getAwaitingChatId } from '../storage/pendingState.js';
 
 function fakeCtx(userId: number) {
   const replies: string[] = [];
+  const answers: string[] = [];
   const ctx = {
     from: { id: userId },
     chat: { id: userId },
+    callbackQuery: undefined as { data: string } | undefined,
     telegram: {
       editMessageText: async () => {
         throw new Error('no message tracked to edit in this test');
@@ -18,8 +20,11 @@ function fakeCtx(userId: number) {
       replies.push(text);
       return { message_id: 1 };
     },
+    answerCbQuery: async (text?: string) => {
+      if (text) answers.push(text);
+    },
   };
-  return { ctx: ctx as unknown as Context, replies };
+  return { ctx: ctx as unknown as Context, rawCtx: ctx, replies, answers };
 }
 
 test('promptForPlace marks the user awaiting a submission for that group', async () => {
@@ -62,6 +67,31 @@ test('promptForPlace does not revert the card again if the awaiting state alread
   await Promise.resolve();
 
   assert.equal(replies.length, 1); // only the original prompt, no extra revert message
+});
+
+test('handleCancelAwaitingAction clears the awaiting state and reverts the card back to the menu', async () => {
+  const userId = 14005;
+  const groupChatId = -13005;
+  const { ctx, rawCtx, replies } = fakeCtx(userId);
+  await promptForPlace(ctx, groupChatId);
+  assert.equal(getAwaitingChatId(userId), groupChatId);
+
+  rawCtx.callbackQuery = { data: 'cancel_awaiting' };
+  await assert.doesNotReject(handleCancelAwaitingAction(ctx)); // answerCbQuery(ctx) with no text must not throw
+
+  assert.equal(getAwaitingChatId(userId), undefined);
+  assert.equal(replies.length, 2); // the prompt + the reverted card (editMessageText always throws here)
+  assert.doesNotMatch(replies[1], /Куди хочеться/);
+});
+
+test('handleCancelAwaitingAction is a no-op when there is no active prompt to cancel', async () => {
+  const userId = 14006;
+  const { ctx, rawCtx, replies } = fakeCtx(userId);
+  rawCtx.callbackQuery = { data: 'cancel_awaiting' };
+
+  await handleCancelAwaitingAction(ctx);
+
+  assert.equal(replies.length, 0);
 });
 
 test('promptForPlace called twice for the same user only reverts once, from the newer call', async (t) => {

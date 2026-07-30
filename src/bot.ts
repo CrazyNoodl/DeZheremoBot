@@ -2,6 +2,7 @@ import 'dotenv/config';
 import * as Sentry from '@sentry/node';
 import { Telegraf } from 'telegraf';
 import { handleAdminAction, handleAdminCommand } from './commands/admin.js';
+import { CANCEL_AWAITING_ACTION, handleCancelAwaitingAction } from './commands/add.js';
 import { handleMyChatMember, handleNewChatTitle } from './commands/groupChat.js';
 import { handleHelpCommand } from './commands/help.js';
 import { buildGroupMenu, DECLINE_GROUP_ACTION, START_ADD_PREFIX, START_LIST_PREFIX } from './commands/keyboard.js';
@@ -11,7 +12,9 @@ import {
   DECLINE_ACTION,
   handleDeclineAction,
   handleGroupDeclineAction,
+  handleResubmitDeclinedAction,
   handleSubmitAction,
+  RESUBMIT_DECLINED_ACTION,
   showPersonalMenu,
   SUBMIT_ACTION,
 } from './commands/menu.js';
@@ -56,7 +59,9 @@ bot.on('my_chat_member', handleMyChatMember);
 bot.on('new_chat_title', handleNewChatTitle);
 bot.action(SUBMIT_ACTION, handleSubmitAction);
 bot.action(DECLINE_ACTION, handleDeclineAction);
+bot.action(CANCEL_AWAITING_ACTION, handleCancelAwaitingAction);
 bot.action(DECLINE_GROUP_ACTION, handleGroupDeclineAction);
+bot.action(RESUBMIT_DECLINED_ACTION, handleResubmitDeclinedAction);
 bot.action(/^sched:/, handleScheduleAction);
 bot.command('schedule', handleScheduleCommand);
 bot.action(/^admin:/, handleAdminAction);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { escapeHtml, placeLink } from './htmlFormat.js';
+import { escapeHtml, placeLabel, placeLink } from './htmlFormat.js';
 
 test('escapeHtml escapes & individually', () => {
   assert.equal(escapeHtml('a & b'), 'a &amp; b');
@@ -80,6 +80,14 @@ test('placeLink renders a non-Instagram link (maps.app.goo.gl) with the generic 
     placeLink('https://maps.app.goo.gl/AbCdEf12345'),
     '<a href="https://maps.app.goo.gl/AbCdEf12345">заклад</a>',
   );
+});
+
+test('placeLabel extracts the Instagram username, plain (no HTML), for use as a button label', () => {
+  assert.equal(placeLabel('https://www.instagram.com/milkbarkyiv'), 'milkbarkyiv');
+});
+
+test('placeLabel returns the generic "заклад" label for a non-Instagram link', () => {
+  assert.equal(placeLabel('https://maps.app.goo.gl/AbCdEf12345'), 'заклад');
 });
 
 test('placeLink escapes a " smuggled in via the permissive trailing query string so it cannot break out of the href attribute', () => {

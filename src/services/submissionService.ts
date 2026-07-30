@@ -1,4 +1,10 @@
 import { blockUser, isBlocked, listBlockedUsers, unblockUser, type BlockedUser } from '../storage/blockedUsers.js';
+import {
+  clearDeclinedPlace,
+  clearDeclinedPlacesForChat,
+  getDeclinedPlace as getRememberedDeclinedPlace,
+  rememberDeclinedPlace,
+} from '../storage/declinedPlace.js';
 import { recordDraw as persistDraw } from '../storage/history.js';
 import { isLocked, lock, unlock } from '../storage/lockState.js';
 import { isPaused, pause, resume } from '../storage/pauseState.js';
@@ -112,8 +118,26 @@ export function declinePlace(chatId: number, userId: number, username: string): 
     return { ok: true, declined: false };
   }
 
+  const previousPlace = existing?.status === 'submitted' ? existing.place : undefined;
+  // Remembers exactly the place this decline is retracting — not anything from an earlier week or
+  // response — so cancelling the decline can offer it straight back (see getDeclinedPlace below).
+  // Explicitly cleared when there's no real previous place, so a stale value from an earlier
+  // week/response can never leak forward as if it were this decline's.
+  if (previousPlace !== undefined) {
+    rememberDeclinedPlace(chatId, userId, previousPlace);
+  } else {
+    clearDeclinedPlace(chatId, userId);
+  }
+
   addDecline(chatId, userId, username);
-  return { ok: true, declined: true, previousPlace: existing?.status === 'submitted' ? existing.place : undefined };
+  return { ok: true, declined: true, previousPlace };
+}
+
+// The place a user had submitted right before their current decline, if any — see
+// storage/declinedPlace.ts for why this is tracked separately from the submissions table itself
+// (declining overwrites/empties that row, so the place is otherwise gone once declined).
+export function getDeclinedPlace(chatId: number, userId: number): string | undefined {
+  return getRememberedDeclinedPlace(chatId, userId);
 }
 
 export function getAllSubmissions(chatId: number): Submission[] {
@@ -183,6 +207,9 @@ export function pickWeeklyWinner(chatId: number): Submission | undefined {
 export function resetWeek(chatId: number): void {
   clearSubmissions(chatId);
   unlock(chatId);
+  // A fresh week means nothing left over from the last one — without this, a decline remembered
+  // two weeks ago could resurface as a quick-pick option in a week that never touched it.
+  clearDeclinedPlacesForChat(chatId);
 }
 
 export function recordDraw(chatId: number, winner: Submission | undefined): void {

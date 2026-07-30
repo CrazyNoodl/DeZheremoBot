@@ -1,7 +1,8 @@
 import * as Sentry from '@sentry/node';
-import type { Context } from 'telegraf';
-import { clearAwaitingSubmission, isCurrentAwaitingToken, markAwaitingSubmission } from '../storage/pendingState.js';
+import { Markup, type Context } from 'telegraf';
+import { clearAwaitingSubmission, getAwaitingChatId, isCurrentAwaitingToken, markAwaitingSubmission } from '../storage/pendingState.js';
 import { buildMenuKeyboard, buildMenuText, updateMenuMessage } from './menuMessage.js';
+import { safeAnswerCbQuery } from './panel.js';
 
 // Shown both when prompting for a place and when a submitted one fails format validation
 // (services/submissionService.ts's isValidPlaceLink) — keeps the accepted formats worded
@@ -12,6 +13,12 @@ export const PLACE_LINK_FORMAT_HINT =
   '• Google Maps — напр. https://maps.app.goo.gl/uKwFMyv1DMrUtZua8\n' +
   '• Instagram — напр. https://www.instagram.com/milkbarkyiv\n\n' +
   'Спробуй ще раз 👇';
+
+// Shown alongside the prompt (and every retry of it — too-long/invalid-format/rate-limited replies
+// in commands/text.ts reuse this exact keyboard) so someone who tapped "✏️ Змінити"/"➕ Додати" but
+// changed their mind isn't stuck either typing a link or waiting out the 1h TTL.
+export const CANCEL_AWAITING_ACTION = 'cancel_awaiting';
+export const CANCEL_AWAITING_KEYBOARD = Markup.inlineKeyboard([[Markup.button.callback('⬅️ Скасувати', CANCEL_AWAITING_ACTION)]]);
 
 // commands/text.ts checks getAwaitingChatId before treating a message as a submission, so a prompt
 // left unanswered (user abandons it, or gets here via handleDeclineAction's cancel and never
@@ -48,5 +55,25 @@ export async function promptForPlace(ctx: Context, groupChatId: number): Promise
       '(maps.app.goo.gl) або Instagram.\n\n' +
       'Наприклад: https://expz.menu/d0838ea9-b9ae-44dd-b99d-993f0a0206fd, ' +
       'https://maps.app.goo.gl/uKwFMyv1DMrUtZua8 або https://www.instagram.com/milkbarkyiv',
+    CANCEL_AWAITING_KEYBOARD,
   );
+}
+
+// Backs out of the "awaiting a place" prompt without submitting anything — the counterpart to
+// promptForPlace, reachable from its "⬅️ Скасувати" button (and from the same button shown again
+// on a too-long/invalid-format/rate-limited retry in commands/text.ts). A no-op if the prompt was
+// already resolved or had already expired by the time this tap lands (getAwaitingChatId undefined).
+export async function handleCancelAwaitingAction(ctx: Context): Promise<void> {
+  if (ctx.callbackQuery) {
+    await safeAnswerCbQuery(ctx);
+  }
+
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const groupChatId = getAwaitingChatId(userId);
+  if (groupChatId === undefined) return;
+
+  clearAwaitingSubmission(userId);
+  await updateMenuMessage(ctx, groupChatId, userId, buildMenuText(groupChatId, userId), buildMenuKeyboard(groupChatId, userId));
 }

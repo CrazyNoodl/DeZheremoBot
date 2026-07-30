@@ -4,6 +4,7 @@ import {
   blockUserFromGroup,
   declinePlace,
   getAllSubmissions,
+  getDeclinedPlace,
   isGroupPaused,
   isSubmissionLocked,
   isUserBlocked,
@@ -243,6 +244,45 @@ test('recordDraw does not add a decliner to getHistoricalSubmitters', () => {
 
   const submitters = getHistoricalSubmitters(-9025).map((s) => s.userId);
   assert.deepEqual(submitters, [1]);
+});
+
+test('getDeclinedPlace is undefined when the user has never declined', () => {
+  assert.equal(getDeclinedPlace(-9026, 1), undefined);
+});
+
+test('declinePlace remembers the exact place it retracted, retrievable via getDeclinedPlace', () => {
+  submitPlace(-9027, 1, 'artem', FIRST_PLACE_LINK);
+
+  declinePlace(-9027, 1, 'artem');
+
+  assert.equal(getDeclinedPlace(-9027, 1), FIRST_PLACE_LINK);
+});
+
+test('getDeclinedPlace is undefined when the decline had nothing to retract', () => {
+  declinePlace(-9028, 1, 'artem'); // first-ever response this week is a decline, no prior place
+
+  assert.equal(getDeclinedPlace(-9028, 1), undefined);
+});
+
+test('declining again with nothing to retract clears a previously remembered place', () => {
+  submitPlace(-9029, 1, 'artem', FIRST_PLACE_LINK);
+  declinePlace(-9029, 1, 'artem'); // remembers FIRST_PLACE_LINK
+  assert.equal(getDeclinedPlace(-9029, 1), FIRST_PLACE_LINK);
+
+  declinePlace(-9029, 1, 'artem'); // cancels the decline (toggle back to no response)
+  declinePlace(-9029, 1, 'artem'); // declines again with nothing submitted in between
+
+  assert.equal(getDeclinedPlace(-9029, 1), undefined);
+});
+
+test('resetWeek clears any remembered declined place for that chat', () => {
+  submitPlace(-9030, 1, 'artem', FIRST_PLACE_LINK);
+  declinePlace(-9030, 1, 'artem');
+  assert.equal(getDeclinedPlace(-9030, 1), FIRST_PLACE_LINK);
+
+  resetWeek(-9030);
+
+  assert.equal(getDeclinedPlace(-9030, 1), undefined);
 });
 
 test('resetWeek clears submissions and unlocks the chat', () => {
