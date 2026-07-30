@@ -64,56 +64,61 @@ async function sendReminder(bot: Telegraf, chatId: number, schedule: GroupSchedu
   await sendTaggedReminder(bot.telegram, bot.botInfo!.username, chatId);
 }
 
-export function startScheduler(bot: Telegraf): void {
-  cron.schedule('* * * * *', () => {
-    const { weekday, time, date } = getKyivNow();
+// The per-minute tick's actual logic, factored out so it can be called directly with a controlled
+// `now` in tests instead of only ever firing from a real node-cron schedule against the real
+// system clock — mirrors why getKyivNow() itself was pulled out of this file (see kyivTime.ts).
+export function runSchedulerTick(bot: Telegraf, now: { weekday: number; time: string; date: string }): void {
+  const { weekday, time, date } = now;
 
-    for (const chatId of listGroupChats()) {
-      const schedule = getGroupSchedule(chatId);
-      const paused = isGroupPaused(chatId);
+  for (const chatId of listGroupChats()) {
+    const schedule = getGroupSchedule(chatId);
+    const paused = isGroupPaused(chatId);
 
-      // >= + hasFiredToday instead of === : an exact-minute match means a stalled event loop or a
-      // process that was down at that exact minute skips the action forever that day. Comparing
-      // "has the scheduled time passed today, and haven't we already done this" catches up on the
-      // next tick instead, while fired_events (persisted, survives restarts) stops it from ever
-      // firing twice for the same calendar day.
-      //
-      // A paused chat still calls markFired below when its condition is met — only the actual
-      // action (send/lock/draw) is skipped. Marking it fired anyway means a chat paused and
-      // resumed on the same calendar day never fires that day's action retroactively on resume:
-      // without this, resuming after a scheduled time already passed while paused would look
-      // identical to "the process was down at that exact minute" and trigger the same catch-up
-      // this comparison exists for, which is the wrong outcome for a deliberate pause. The
-      // tradeoff this accepts: a chat paused across its scheduled day skips that occurrence for
-      // good, not just until resumed — see "Pausing a group" for why that's the intended behavior.
-      if (
-        schedule.reminderWeekdays.includes(weekday) &&
-        time >= schedule.reminderTime &&
-        !hasFiredToday(chatId, 'reminder', date)
-      ) {
-        markFired(chatId, 'reminder', date);
-        if (!paused) sendReminder(bot, chatId, schedule, weekday);
-      }
+    // >= + hasFiredToday instead of === : an exact-minute match means a stalled event loop or a
+    // process that was down at that exact minute skips the action forever that day. Comparing
+    // "has the scheduled time passed today, and haven't we already done this" catches up on the
+    // next tick instead, while fired_events (persisted, survives restarts) stops it from ever
+    // firing twice for the same calendar day.
+    //
+    // A paused chat still calls markFired below when its condition is met — only the actual
+    // action (send/lock/draw) is skipped. Marking it fired anyway means a chat paused and
+    // resumed on the same calendar day never fires that day's action retroactively on resume:
+    // without this, resuming after a scheduled time already passed while paused would look
+    // identical to "the process was down at that exact minute" and trigger the same catch-up
+    // this comparison exists for, which is the wrong outcome for a deliberate pause. The
+    // tradeoff this accepts: a chat paused across its scheduled day skips that occurrence for
+    // good, not just until resumed — see "Pausing a group" for why that's the intended behavior.
+    if (
+      schedule.reminderWeekdays.includes(weekday) &&
+      time >= schedule.reminderTime &&
+      !hasFiredToday(chatId, 'reminder', date)
+    ) {
+      markFired(chatId, 'reminder', date);
+      if (!paused) sendReminder(bot, chatId, schedule, weekday);
+    }
 
-      if (weekday === schedule.deadlineWeekday && time >= schedule.lockTime && !hasFiredToday(chatId, 'lock', date)) {
-        markFired(chatId, 'lock', date);
-        if (!paused) lockSubmissions(chatId);
-      }
+    if (weekday === schedule.deadlineWeekday && time >= schedule.lockTime && !hasFiredToday(chatId, 'lock', date)) {
+      markFired(chatId, 'lock', date);
+      if (!paused) lockSubmissions(chatId);
+    }
 
-      if (weekday === schedule.deadlineWeekday && time >= schedule.drawTime && !hasFiredToday(chatId, 'draw', date)) {
-        markFired(chatId, 'draw', date);
-        if (!paused) {
-          const winner = pickWeeklyWinner(chatId);
-          recordDraw(chatId, winner);
-          // resetWeek runs synchronously, right after recordDraw and before the network call below —
-          // not chained off sendToChat's promise. Gating the reset on the send meant a crash during
-          // that network round-trip left the chat stuck locked (with fired_events already marking
-          // 'draw' done for today) until the following week's draw. Unlocking is local, durable state;
-          // the announcement is best-effort UI feedback and can safely fail independently.
-          resetWeek(chatId);
-          sendToChat(bot.telegram, chatId, buildDrawAnnouncement(winner), { parse_mode: 'HTML' });
-        }
+    if (weekday === schedule.deadlineWeekday && time >= schedule.drawTime && !hasFiredToday(chatId, 'draw', date)) {
+      markFired(chatId, 'draw', date);
+      if (!paused) {
+        const winner = pickWeeklyWinner(chatId);
+        recordDraw(chatId, winner);
+        // resetWeek runs synchronously, right after recordDraw and before the network call below —
+        // not chained off sendToChat's promise. Gating the reset on the send meant a crash during
+        // that network round-trip left the chat stuck locked (with fired_events already marking
+        // 'draw' done for today) until the following week's draw. Unlocking is local, durable state;
+        // the announcement is best-effort UI feedback and can safely fail independently.
+        resetWeek(chatId);
+        sendToChat(bot.telegram, chatId, buildDrawAnnouncement(winner), { parse_mode: 'HTML' });
       }
     }
-  });
+  }
+}
+
+export function startScheduler(bot: Telegraf): void {
+  cron.schedule('* * * * *', () => runSchedulerTick(bot, getKyivNow()));
 }

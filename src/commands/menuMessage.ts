@@ -23,22 +23,22 @@ export function withGroupLabel(groupChatId: number, text: string): string {
   return title ? `📍 ${escapeHtml(title)}\n\n${text}` : text;
 }
 
-// e.g. "Пт о 18:00" — shown in the menu card so a member can see when submissions close without
-// having to separately open /help.
+// e.g. "Пт, 18:00" — shown at the top of the menu card so a member can see when submissions
+// close without having to separately open /help.
 function deadlineLabel(groupChatId: number): string {
   const schedule = getSchedule(groupChatId);
-  return `${WEEKDAY_LABELS[schedule.deadlineWeekday]} о ${schedule.lockTime}`;
+  return `${WEEKDAY_LABELS[schedule.deadlineWeekday]}, ${schedule.lockTime}`;
 }
 
 export function buildMenuText(groupChatId: number, userId: number): string {
   const submission = getUserSubmission(groupChatId, userId);
-  const deadlineLine = `\n\n⏰ Дедлайн подачі: ${deadlineLabel(groupChatId)}`;
+  const deadlineLine = `<i>⏰ Дедлайн: ${deadlineLabel(groupChatId)}</i>\n\n`;
   if (submission?.status === 'declined') {
-    return `🙅 Записано: цього тижня ти не йдеш.\n\nПлани зміняться — тисни кнопку нижче 👇${deadlineLine}`;
+    return `${deadlineLine}🙅 Записано: цього тижня ти не йдеш.\n\nПлани зміняться — тисни кнопку нижче 👇`;
   }
   return submission
-    ? `📍 Твій варіант цього тижня: ${placeLink(submission.place)}\n\nХочеш змінити — тисни кнопку нижче 👇${deadlineLine}`
-    : `🤔 Ще нема варіанту на цей тиждень? Додай посилання на заклад — тисни кнопку нижче 👇${deadlineLine}`;
+    ? `${deadlineLine}📍 Твій варіант цього тижня: ${placeLink(submission.place)}\n\nХочеш змінити — тисни кнопку нижче 👇`
+    : `${deadlineLine}🤔 Ще нема варіанту на цей тиждень? Додай посилання на заклад — тисни кнопку нижче 👇`;
 }
 
 export function buildMenuKeyboard(groupChatId: number, userId: number) {

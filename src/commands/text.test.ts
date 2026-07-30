@@ -4,12 +4,12 @@ import { handleTextMessage } from './text.js';
 import { getAwaitingChatId, markAwaitingSubmission } from '../storage/pendingState.js';
 import { blockUserFromGroup, lockSubmissions, MAX_PLACE_LENGTH, pauseGroup } from '../services/submissionService.js';
 
-function fakeCtx(userId: number, text: string) {
+function fakeCtx(userId: number, text: string, memberStatus: string = 'member', chatType: string = 'private') {
   const replies: string[] = [];
   const deletions: number[] = [];
   const ctx = {
     from: { id: userId, username: 'tester' },
-    chat: { id: userId }, // private chat id
+    chat: { id: userId, type: chatType }, // private chat id
     message: { text },
     reply: async (t: string) => {
       replies.push(t);
@@ -20,6 +20,7 @@ function fakeCtx(userId: number, text: string) {
     },
     telegram: {
       sendMessage: async () => ({ message_id: 2 }),
+      getChatMember: async () => ({ status: memberStatus }),
     },
   };
   return { ctx: ctx as unknown as Parameters<typeof handleTextMessage>[0], replies, deletions };
@@ -93,6 +94,19 @@ test('a successful submission clears the awaiting state and confirms', async () 
   assert.match(replies[0], /Додано/);
 });
 
+test('a user who left the group after the prompt was set is rejected and the awaiting state is cleared', async () => {
+  const userId = 13007;
+  const chatId = -12007;
+  markAwaitingSubmission(userId, chatId);
+  const { ctx, replies, deletions } = fakeCtx(userId, 'https://www.instagram.com/dezheroma', 'left');
+
+  await handleTextMessage(ctx);
+
+  assert.equal(getAwaitingChatId(userId), undefined);
+  assert.equal(deletions.length, 1);
+  assert.match(replies[0], /вже не в цій групі/);
+});
+
 test('a non-link place is rejected and keeps the user awaiting so they can retype', async () => {
   const userId = 13005;
   const chatId = -12005;
@@ -104,4 +118,25 @@ test('a non-link place is rejected and keeps the user awaiting so they can retyp
   assert.equal(getAwaitingChatId(userId), chatId);
   assert.equal(deletions.length, 1);
   assert.match(replies[0], /посилання/);
+});
+
+test('plain text with no pending prompt in a private chat gets a nudge back to the menu', async () => {
+  const userId = 13008;
+  const { ctx, replies, deletions } = fakeCtx(userId, 'test');
+
+  await handleTextMessage(ctx);
+
+  assert.equal(replies.length, 1);
+  assert.match(replies[0], /\/start/);
+  assert.equal(deletions.length, 1);
+});
+
+test('plain text with no pending prompt in a group chat stays silent', async () => {
+  const userId = 13009;
+  const { ctx, replies, deletions } = fakeCtx(userId, 'test', 'member', 'supergroup');
+
+  await handleTextMessage(ctx);
+
+  assert.equal(replies.length, 0);
+  assert.equal(deletions.length, 0);
 });
