@@ -16,6 +16,7 @@ const { isGroupPaused, pauseGroup } = await import('../services/submissionServic
 const { DEFAULT_SCHEDULE } = await import('../storage/groupSchedules.js');
 const { hasFiredToday } = await import('../storage/firedEvents.js');
 const { getKyivNow } = await import('../kyivTime.js');
+const { listAdminActions } = await import('../storage/auditLog.js');
 
 function fakeCtx(status: string, userId: number) {
   const replies: string[] = [];
@@ -70,6 +71,7 @@ test('handleScheduleAction refuses "reset" for a user who is no longer an admin'
 
   assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
   assert.deepEqual(getSchedule(chatId), { ...DEFAULT_SCHEDULE, reminderWeekdays: [2, 4], reminderTime: '09:00' });
+  assert.deepEqual(listAdminActions(chatId), []);
 });
 
 test('handleScheduleAction refuses "edit_reminder" for a demoted admin and clears any stale edit state', async () => {
@@ -133,6 +135,7 @@ test('handleScheduleAction refuses "remind" for a user who is no longer an admin
 
   assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
   assert.deepEqual(sentMessages, []);
+  assert.deepEqual(listAdminActions(chatId), []);
 });
 
 test('handleScheduleAction sends a tagged reminder and marks it fired when a current admin taps "remind"', async () => {
@@ -147,6 +150,7 @@ test('handleScheduleAction sends a tagged reminder and marks it fired when a cur
   assert.equal(sentMessages[0].chatId, chatId);
   assert.match(sentMessages[0].text, /ДеЖеремо цього тижня/);
   assert.equal(hasFiredToday(chatId, 'reminder', getKyivNow().date), true);
+  assert.equal(listAdminActions(chatId)[0]?.action, 'remind');
 });
 
 test('"reset" does not clear a group\'s paused state — pause is independent of schedule config', async () => {
@@ -160,6 +164,7 @@ test('"reset" does not clear a group\'s paused state — pause is independent of
 
   assert.deepEqual(getSchedule(chatId), DEFAULT_SCHEDULE);
   assert.equal(isGroupPaused(chatId), true);
+  assert.equal(listAdminActions(chatId)[0]?.action, 'reset_schedule');
 });
 
 test('handleScheduleTextStep refuses to apply a time change once the user is no longer admin', async () => {
@@ -174,6 +179,7 @@ test('handleScheduleTextStep refuses to apply a time change once the user is no 
   assert.equal(replies.some((r) => /більше не адмін/.test(r)), true);
   assert.deepEqual(getSchedule(chatId), DEFAULT_SCHEDULE);
   assert.equal(getScheduleEditState(userId), undefined);
+  assert.deepEqual(listAdminActions(chatId), []);
 });
 
 test('handleScheduleTextStep applies a time change when the user is still admin', async () => {
@@ -186,4 +192,20 @@ test('handleScheduleTextStep applies a time change when the user is still admin'
 
   assert.equal(handled, true);
   assert.deepEqual(getSchedule(chatId), { ...DEFAULT_SCHEDULE, reminderWeekdays: [1, 3], reminderTime: '11:00' });
+
+  const [entry] = listAdminActions(chatId);
+  assert.equal(entry.action, 'edit_reminder');
+  assert.equal(entry.detail, 'days:1,3 time:11:00');
+});
+
+test('handleScheduleTextStep does not log an audit entry for an invalid time (no mutation happened)', async () => {
+  const userId = 20008;
+  const chatId = -20008;
+  setScheduleEditState(userId, { flow: 'reminder', step: 'time', chatId, weekdays: [1, 3] });
+
+  const { ctx } = fakeCtx('administrator', userId);
+  const handled = await handleScheduleTextStep(ctx, userId, 'not-a-time');
+
+  assert.equal(handled, true);
+  assert.deepEqual(listAdminActions(chatId), []);
 });

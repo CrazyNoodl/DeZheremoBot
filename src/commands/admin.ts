@@ -16,6 +16,7 @@ import {
   resumeGroup,
   unblockUserFromGroup,
 } from '../services/submissionService.js';
+import { logAdminAction } from '../storage/auditLog.js';
 import { markFired } from '../storage/firedEvents.js';
 import { sendToChat } from '../telegramBroadcast.js';
 import { createPanel, safeAnswerCbQuery } from './panel.js';
@@ -168,14 +169,18 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
     return;
   }
 
+  const actorName = ctx.from?.username ?? ctx.from?.first_name;
+
   if (action === 'pause') {
     pauseGroup(chatId);
+    logAdminAction({ chatId, actorUserId: userId, actorName, action: 'pause' });
     await renderAdminPanel(ctx, userId, chatId);
     return;
   }
 
   if (action === 'resume') {
     resumeGroup(chatId);
+    logAdminAction({ chatId, actorUserId: userId, actorName, action: 'resume' });
     await renderAdminPanel(ctx, userId, chatId);
     return;
   }
@@ -189,6 +194,13 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
     // Marks today's draw as already fired so the scheduler's own tick doesn't run a second, empty
     // draw later the same day if this group's scheduled draw time hasn't passed yet.
     markFired(chatId, 'draw', getKyivNow().date);
+    logAdminAction({
+      chatId,
+      actorUserId: userId,
+      actorName,
+      action: 'draw',
+      detail: winner ? `winner:${winner.userId}` : undefined,
+    });
     await sendToChat(ctx.telegram, chatId, buildDrawAnnouncement(winner), { parse_mode: 'HTML' });
     await renderAdminPanel(ctx, userId, chatId);
     return;
@@ -196,12 +208,14 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
 
   if (action === 'reopen') {
     reopenSubmissions(chatId);
+    logAdminAction({ chatId, actorUserId: userId, actorName, action: 'reopen' });
     await renderAdminPanel(ctx, userId, chatId);
     return;
   }
 
   if (action === 'clearweek') {
     resetWeek(chatId);
+    logAdminAction({ chatId, actorUserId: userId, actorName, action: 'clearweek' });
     await renderAdminPanel(ctx, userId, chatId);
     return;
   }
@@ -217,6 +231,7 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
     // submission as part of blocking, so their username has to be captured from it first.
     const target = getAllSubmissions(chatId).find((s) => s.userId === targetUserId);
     blockUserFromGroup(chatId, targetUserId, target?.username, userId);
+    logAdminAction({ chatId, actorUserId: userId, actorName, action: 'block', detail: `target:${targetUserId}` });
     await renderBlocklistPanel(ctx, userId, chatId);
     return;
   }
@@ -224,6 +239,7 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
   if (action === 'unblock') {
     if (targetUserId === undefined) return;
     unblockUserFromGroup(chatId, targetUserId);
+    logAdminAction({ chatId, actorUserId: userId, actorName, action: 'unblock', detail: `target:${targetUserId}` });
     await renderBlocklistPanel(ctx, userId, chatId);
     return;
   }

@@ -10,6 +10,7 @@ import {
   type GroupScheduleConfig,
   type UpdateResult,
 } from '../services/scheduleService.js';
+import { logAdminAction } from '../storage/auditLog.js';
 import { markFired } from '../storage/firedEvents.js';
 import {
   clearScheduleEditState,
@@ -192,6 +193,12 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
   if (action === 'reset') {
     const chatId = Number(arg);
     resetSchedule(chatId);
+    logAdminAction({
+      chatId,
+      actorUserId: userId,
+      actorName: ctx.from?.username ?? ctx.from?.first_name,
+      action: 'reset_schedule',
+    });
     await renderSummary(ctx, userId, chatId);
     return;
   }
@@ -202,6 +209,7 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
     // duplicate reminder later the same day if this group's scheduled reminder time hasn't passed
     // yet — same reasoning as admin.ts's "force draw now" marking 'draw' fired.
     markFired(chatId, 'reminder', getKyivNow().date);
+    logAdminAction({ chatId, actorUserId: userId, actorName: ctx.from?.username ?? ctx.from?.first_name, action: 'remind' });
     await sendTaggedReminder(ctx.telegram, ctx.botInfo.username, chatId);
     await renderSummary(ctx, userId, chatId);
     return;
@@ -287,6 +295,15 @@ export async function handleScheduleTextStep(ctx: Context, userId: number, text:
 
   if (state.flow === 'reminder' && state.step === 'time') {
     const result = updateReminderSchedule(state.chatId, state.weekdays, text);
+    if (result.ok) {
+      logAdminAction({
+        chatId: state.chatId,
+        actorUserId: userId,
+        actorName: ctx.from?.username ?? ctx.from?.first_name,
+        action: 'edit_reminder',
+        detail: `days:${state.weekdays.join(',')} time:${text}`,
+      });
+    }
     await reportTimeResult(ctx, userId, state.chatId, result, 'Введи час нагадувань у форматі ГГ:ХХ, напр. 10:00');
     return true;
   }
@@ -309,6 +326,15 @@ export async function handleScheduleTextStep(ctx: Context, userId: number, text:
 
   if (state.flow === 'deadline' && state.step === 'drawTime') {
     const result = updateDeadlineSchedule(state.chatId, state.weekday, state.lockTime, text);
+    if (result.ok) {
+      logAdminAction({
+        chatId: state.chatId,
+        actorUserId: userId,
+        actorName: ctx.from?.username ?? ctx.from?.first_name,
+        action: 'edit_deadline',
+        detail: `weekday:${state.weekday} lock:${state.lockTime} draw:${text}`,
+      });
+    }
     await reportTimeResult(ctx, userId, state.chatId, result, 'Введи час жеребкування (draw) у форматі ГГ:ХХ, напр. 18:15');
     return true;
   }

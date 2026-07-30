@@ -9,7 +9,9 @@ const DB_FILE = process.env.DEZHEREMO_HISTORY_DB ?? path.join(DATA_DIR, 'history
 if (DB_FILE !== ':memory:') {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
-const db = new DatabaseSync(DB_FILE);
+// Shared by history.ts's own weekly_draws/submissions_history and auditLog.ts's admin_actions:
+// same append-only-log shape, one connection rather than two onto the same file.
+export const db = new DatabaseSync(DB_FILE);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS weekly_draws (
