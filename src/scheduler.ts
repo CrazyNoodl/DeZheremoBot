@@ -1,4 +1,5 @@
 import cron from 'node-cron';
+import * as Sentry from '@sentry/node';
 import type { Telegraf, Telegram } from 'telegraf';
 import { buildDrawAnnouncement, buildFinalReminderExtra, pickRandomEmoji } from './announcements.js';
 import { buildGroupMenu } from './commands/keyboard.js';
@@ -30,6 +31,7 @@ async function fetchTotalMembers(telegram: Telegram, chatId: number): Promise<nu
     return await telegram.getChatMembersCount(chatId);
   } catch (err) {
     console.error(`[scheduler] failed to fetch member count for chat ${chatId}:`, err);
+    Sentry.captureException(err);
     return undefined;
   }
 }

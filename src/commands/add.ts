@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/node';
 import type { Context } from 'telegraf';
 import { clearAwaitingSubmission, isCurrentAwaitingToken, markAwaitingSubmission } from '../storage/pendingState.js';
 import { buildMenuKeyboard, buildMenuText, updateMenuMessage } from './menuMessage.js';
@@ -28,8 +29,14 @@ export async function promptForPlace(ctx: Context, groupChatId: number): Promise
     // by a newer promptForPlace call for this user, whose own timer owns the cleanup instead.
     if (!isCurrentAwaitingToken(userId, token)) return;
     clearAwaitingSubmission(userId);
+    // Runs on a bare setTimeout, outside any Telegraf handler — unlike every other
+    // updateMenuMessage call in this codebase, a throw here has no bot.catch(...) safety net to
+    // land in, so it must be logged here directly rather than silently swallowed.
     updateMenuMessage(ctx, groupChatId, userId, buildMenuText(groupChatId, userId), buildMenuKeyboard(groupChatId, userId)).catch(
-      () => {},
+      (err) => {
+        console.error(`[add] TTL revert failed for user ${userId}:`, err);
+        Sentry.captureException(err);
+      },
     );
   }, AWAITING_SUBMISSION_TTL_MS);
 

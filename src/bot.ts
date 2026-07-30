@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import * as Sentry from '@sentry/node';
 import { Telegraf } from 'telegraf';
 import { handleAdminAction, handleAdminCommand } from './commands/admin.js';
 import { handleMyChatMember, handleNewChatTitle } from './commands/groupChat.js';
@@ -17,6 +18,13 @@ import { handleScheduleAction, handleScheduleCommand } from './commands/schedule
 import { handleTextMessage } from './commands/text.js';
 import { startScheduler } from './scheduler.js';
 import { addGroupChat } from './storage/groupChats.js';
+
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV === 'production' ? 'production' : 'development',
+  });
+}
 
 const token = process.env.BOT_TOKEN;
 if (!token) {
@@ -64,6 +72,7 @@ bot.launch(() => {
 // the bot silently doing nothing.
 bot.catch((err, ctx) => {
   console.error(`[bot] unhandled error for update ${ctx.update.update_id}:`, err);
+  Sentry.captureException(err);
 });
 
 process.once('SIGINT', () => bot.stop('SIGINT'));

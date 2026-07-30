@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/node';
 import { TelegramError, type Telegram } from 'telegraf';
 import { listGroupChats, removeGroupChat } from './storage/groupChats.js';
 
@@ -22,6 +23,7 @@ async function sendAndTrack(
       // Not the "bot got kicked" case — a real send failure (network, rate limit, bad request).
       // Nothing else observes this, so at minimum it must be logged rather than silently dropped.
       console.error(`[telegramBroadcast] failed to send message to chat ${chatId}:`, err);
+      Sentry.captureException(err);
     }
   }
 }

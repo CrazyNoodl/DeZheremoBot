@@ -13,6 +13,7 @@
     "test": "DEZHEREMO_STATE_DB=:memory: DEZHEREMO_HISTORY_DB=:memory: tsx --test --test-force-exit 'src/**/*.test.ts'"
   },
   "dependencies": {
+    "@sentry/node": "^10.69.0",
     "dotenv": "^16.4.5",
     "node-cron": "^4.6.0",
     "telegraf": "^4.16.3"

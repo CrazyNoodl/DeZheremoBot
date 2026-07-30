@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/node';
 import { Markup, type Context } from 'telegraf';
 import { escapeHtml, placeLink } from '../htmlFormat.js';
 import { getSchedule } from '../services/scheduleService.js';
@@ -105,6 +106,7 @@ export async function updateMenuMessage(
       // Logged at warn rather than error: expected to happen occasionally, but a spike would
       // otherwise be invisible.
       console.warn(`[menuMessage] edit failed for user ${userId}, sending a fresh message instead:`, err);
+      Sentry.captureException(err);
     }
   }
 
