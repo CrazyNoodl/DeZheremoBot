@@ -24,6 +24,22 @@ export const PAUSED_MESSAGE = '⏸ Цього тижня ДеЖеремо на �
 export const BLOCKED_MESSAGE = '🚫 Тебе заблокували в цій групі — додавати заявки більше не можна.';
 const LOCKED_MESSAGE = '🔒 Заявки на цей тиждень уже закрито';
 
+const STALE_MENU_TAP_MESSAGE = '🔄 Ця картка вже застаріла — онови меню командою /start, там уже інший стан.';
+
+// Telegram never expires old inline buttons — if the tapped message isn't the one this user's
+// card is currently tracked as (storage/menuMessages.ts), something already updated the *real*
+// tracked card since this one was rendered (a later action edited it in place, or it aged past
+// the 48h edit window and a fresh message replaced it). Acting on a stale card's button would
+// apply whatever it implies (e.g. "Скасувати «не йду»") against the *current* actual state
+// instead of the state the user is looking at — e.g. tapping a stale cancel-decline button while
+// you've since resubmitted a place would silently decline you again instead of doing nothing.
+function isStaleMenuTap(ctx: Context, userId: number): boolean {
+  const query = ctx.callbackQuery;
+  const tappedMessageId = query && 'message' in query ? query.message?.message_id : undefined;
+  const trackedMessageId = getMenuMessage(userId)?.messageId;
+  return tappedMessageId !== undefined && trackedMessageId !== undefined && tappedMessageId !== trackedMessageId;
+}
+
 // Shared by showPersonalMenu and handleSubmitAction, which both need the exact same
 // blocked → paused → locked precedence and messages before doing anything group-cycle-specific.
 // Renders the relevant notice and returns true if one of these gates applies, so the caller just
@@ -68,13 +84,19 @@ export async function showPersonalMenu(ctx: Context, groupChatId: number): Promi
 }
 
 export async function handleSubmitAction(ctx: Context): Promise<void> {
-  if (ctx.callbackQuery) {
-    await safeAnswerCbQuery(ctx);
-  }
-
   const userId = ctx.from?.id;
   const groupChatId = userId !== undefined ? getMenuMessage(userId)?.groupChatId : undefined;
-  if (!userId || groupChatId === undefined) return;
+  if (!userId || groupChatId === undefined) {
+    if (ctx.callbackQuery) await safeAnswerCbQuery(ctx);
+    return;
+  }
+
+  if (isStaleMenuTap(ctx, userId)) {
+    await safeAnswerCbQuery(ctx, STALE_MENU_TAP_MESSAGE, { show_alert: true });
+    return;
+  }
+
+  await safeAnswerCbQuery(ctx);
 
   // Re-checked here, not just at showPersonalMenu time — the tracked menu card can outlive the
   // user's membership if they left the group after opening it (same reasoning as schedule.ts's
@@ -91,13 +113,19 @@ export async function handleSubmitAction(ctx: Context): Promise<void> {
 
 // Toggles "не йду цього тижня" from the personal menu's second button.
 export async function handleDeclineAction(ctx: Context): Promise<void> {
-  if (ctx.callbackQuery) {
-    await safeAnswerCbQuery(ctx);
-  }
-
   const userId = ctx.from?.id;
   const groupChatId = userId !== undefined ? getMenuMessage(userId)?.groupChatId : undefined;
-  if (!userId || groupChatId === undefined) return;
+  if (!userId || groupChatId === undefined) {
+    if (ctx.callbackQuery) await safeAnswerCbQuery(ctx);
+    return;
+  }
+
+  if (isStaleMenuTap(ctx, userId)) {
+    await safeAnswerCbQuery(ctx, STALE_MENU_TAP_MESSAGE, { show_alert: true });
+    return;
+  }
+
+  await safeAnswerCbQuery(ctx);
 
   if (!(await isChatMember(ctx, groupChatId, userId))) {
     await ctx.reply('🔒 Здається, ти вже не в цій групі.');

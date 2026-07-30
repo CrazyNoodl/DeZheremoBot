@@ -34,13 +34,19 @@ function fakeGroupCtx(status: string, chatId: number, userId: number) {
   return { ctx: ctx as unknown as Parameters<typeof handleGroupDeclineAction>[0], sentMessages, alerts };
 }
 
-function fakeCtx(status: string, userId: number, opts: { answerCbQueryThrows?: boolean } = {}) {
+function fakeCtx(status: string, userId: number, opts: { answerCbQueryThrows?: boolean; tappedMessageId?: number } = {}) {
   const replies: string[] = [];
   const sentMessages: Array<{ chatId: number; text: string }> = [];
+  const alerts: Array<{ text?: string; show_alert?: boolean }> = [];
   const ctx = {
     from: { id: userId },
     chat: { id: userId }, // private chat id, distinct per test via userId
-    callbackQuery: { data: 'submit' }, // real callback presses always have this set
+    // real callback presses always carry data + the tapped message; tappedMessageId is only set
+    // for tests exercising the stale-menu-tap guard (isStaleMenuTap in menu.ts).
+    callbackQuery: {
+      data: 'submit',
+      ...(opts.tappedMessageId !== undefined ? { message: { message_id: opts.tappedMessageId } } : {}),
+    },
     telegram: {
       getChatMember: async () => {
         if (status === 'throw') throw new Error('boom');
@@ -58,11 +64,12 @@ function fakeCtx(status: string, userId: number, opts: { answerCbQueryThrows?: b
       replies.push(text);
       return { message_id: 42 };
     },
-    answerCbQuery: async () => {
+    answerCbQuery: async (text?: string, extra?: { show_alert?: boolean }) => {
+      alerts.push({ text, show_alert: extra?.show_alert });
       if (opts.answerCbQueryThrows) throw new Error('400: query is too old and response timeout expired');
     },
   };
-  return { ctx: ctx as unknown as Parameters<typeof showPersonalMenu>[0], replies, sentMessages };
+  return { ctx: ctx as unknown as Parameters<typeof showPersonalMenu>[0], replies, sentMessages, alerts };
 }
 
 test('showPersonalMenu refuses a non-member', async () => {
@@ -327,4 +334,42 @@ test('handleGroupDeclineAction is idempotent — a second tap after already decl
   assert.equal(second.alerts.length, 1);
   assert.equal(second.alerts[0].show_alert, undefined);
   assert.match(second.alerts[0].text ?? '', /вже позначив/);
+});
+
+test('handleDeclineAction shows a staleness toast and leaves the submission untouched when the tapped card is not the currently tracked one', async () => {
+  const userId = 11027;
+  const groupChatId = -10027;
+  submitPlace(groupChatId, userId, 'tester', 'https://www.instagram.com/somewhere');
+  setMenuMessage(userId, 999, 70, groupChatId); // the real, current card is message 70
+
+  const { ctx, alerts } = fakeCtx('member', userId, { tappedMessageId: 71 }); // a different, stale card
+  await handleDeclineAction(ctx);
+
+  assert.equal(alerts.some((a) => a.show_alert && /застаріла/.test(a.text ?? '')), true);
+  assert.equal(getAllSubmissions(groupChatId)[0]?.status, 'submitted'); // NOT silently declined
+});
+
+test('handleDeclineAction proceeds normally when the tapped card matches the currently tracked one', async () => {
+  const userId = 11028;
+  const groupChatId = -10028;
+  setMenuMessage(userId, 999, 72, groupChatId);
+
+  const { ctx, alerts } = fakeCtx('member', userId, { tappedMessageId: 72 });
+  await handleDeclineAction(ctx);
+
+  assert.equal(alerts.some((a) => /застаріла/.test(a.text ?? '')), false);
+  assert.equal(getAllSubmissions(groupChatId)[0]?.status, 'declined');
+});
+
+test('handleSubmitAction shows a staleness toast and does not start the prompt when the tapped card is stale', async () => {
+  const userId = 11029;
+  const groupChatId = -10029;
+  setMenuMessage(userId, 999, 73, groupChatId);
+
+  const { ctx, alerts, replies } = fakeCtx('member', userId, { tappedMessageId: 74 });
+  await handleSubmitAction(ctx);
+
+  assert.equal(alerts.some((a) => a.show_alert && /застаріла/.test(a.text ?? '')), true);
+  assert.equal(getAwaitingChatId(userId), undefined);
+  assert.equal(replies.length, 0);
 });
