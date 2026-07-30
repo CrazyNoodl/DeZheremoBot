@@ -4,7 +4,7 @@ import { clearAwaitingSubmission, getAwaitingChatId } from '../storage/pendingSt
 import { MAX_PLACE_LENGTH, submitPlace } from '../services/submissionService.js';
 import { sendToChat } from '../telegramBroadcast.js';
 import { isChatMember } from './access.js';
-import { PLACE_LINK_FORMAT_HINT } from './add.js';
+import { CANCEL_AWAITING_KEYBOARD, PLACE_LINK_FORMAT_HINT } from './add.js';
 import { buildMenuKeyboard, buildMenuText, updateMenuMessage } from './menuMessage.js';
 import { BLOCKED_MESSAGE, PAUSED_MESSAGE } from './menu.js';
 import { handleScheduleTextStep } from './schedule.js';
@@ -60,7 +60,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
         : result.reason === 'invalid_format'
           ? PLACE_LINK_FORMAT_HINT
           : '⏳ Не поспішай так — ще трохи і зможеш змінити знову.';
-      await updateMenuMessage(ctx, chatId, userId, text);
+      await updateMenuMessage(ctx, chatId, userId, text, CANCEL_AWAITING_KEYBOARD);
       await ctx.deleteMessage();
       return;
     }
