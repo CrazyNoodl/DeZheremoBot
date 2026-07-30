@@ -12,7 +12,9 @@ import {
   DECLINE_ACTION,
   handleDeclineAction,
   handleGroupDeclineAction,
+  handleResubmitDeclinedAction,
   handleSubmitAction,
+  RESUBMIT_DECLINED_ACTION,
   showPersonalMenu,
   SUBMIT_ACTION,
 } from './commands/menu.js';
@@ -59,6 +61,7 @@ bot.action(SUBMIT_ACTION, handleSubmitAction);
 bot.action(DECLINE_ACTION, handleDeclineAction);
 bot.action(CANCEL_AWAITING_ACTION, handleCancelAwaitingAction);
 bot.action(DECLINE_GROUP_ACTION, handleGroupDeclineAction);
+bot.action(RESUBMIT_DECLINED_ACTION, handleResubmitDeclinedAction);
 bot.action(/^sched:/, handleScheduleAction);
 bot.command('schedule', handleScheduleCommand);
 bot.action(/^admin:/, handleAdminAction);

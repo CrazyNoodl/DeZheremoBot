@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { handleDeclineAction, handleGroupDeclineAction, handleSubmitAction, showPersonalMenu } from './menu.js';
+import {
+  handleDeclineAction,
+  handleGroupDeclineAction,
+  handleResubmitDeclinedAction,
+  handleSubmitAction,
+  showPersonalMenu,
+} from './menu.js';
 import {
   blockUserFromGroup,
+  declinePlace,
   getAllSubmissions,
   lockSubmissions,
   pauseGroup,
@@ -34,7 +41,11 @@ function fakeGroupCtx(status: string, chatId: number, userId: number) {
   return { ctx: ctx as unknown as Parameters<typeof handleGroupDeclineAction>[0], sentMessages, alerts };
 }
 
-function fakeCtx(status: string, userId: number, opts: { answerCbQueryThrows?: boolean; tappedMessageId?: number } = {}) {
+function fakeCtx(
+  status: string,
+  userId: number,
+  opts: { answerCbQueryThrows?: boolean; callbackData?: string; tappedMessageId?: number } = {},
+) {
   const replies: string[] = [];
   const sentMessages: Array<{ chatId: number; text: string }> = [];
   const alerts: Array<{ text?: string; show_alert?: boolean }> = [];
@@ -44,7 +55,7 @@ function fakeCtx(status: string, userId: number, opts: { answerCbQueryThrows?: b
     // real callback presses always carry data + the tapped message; tappedMessageId is only set
     // for tests exercising the stale-menu-tap guard (isStaleMenuTap in menu.ts).
     callbackQuery: {
-      data: 'submit',
+      data: opts.callbackData ?? 'submit',
       ...(opts.tappedMessageId !== undefined ? { message: { message_id: opts.tappedMessageId } } : {}),
     },
     telegram: {
@@ -314,6 +325,100 @@ test('handleGroupDeclineAction announces to the group when it retracts an alread
   assert.match(sentMessages[0].text, /somewhere/);
 });
 
+test('handleDeclineAction cancelling a decline offers exactly the place it retracted as a quick-pick', async () => {
+  const userId = 11021;
+  const groupChatId = -10021;
+  submitPlace(groupChatId, userId, 'tester', 'https://www.instagram.com/somewhere');
+  setMenuMessage(userId, 999, 64, groupChatId);
+
+  const first = fakeCtx('member', userId);
+  await handleDeclineAction(first.ctx);
+  assert.equal(getAllSubmissions(groupChatId)[0]?.status, 'declined');
+
+  const second = fakeCtx('member', userId);
+  await handleDeclineAction(second.ctx);
+
+  assert.equal(getAllSubmissions(groupChatId).length, 0); // decline cancelled, nothing recorded yet
+  assert.equal(getAwaitingChatId(userId), undefined); // did NOT go into the free-text prompt
+  assert.equal(second.replies.some((r) => /Плани зміняться/.test(r)), true);
+});
+
+test('handleDeclineAction cancelling a decline with nothing retracted falls back to the free-text prompt', async () => {
+  const userId = 11026;
+  const groupChatId = -10026;
+  setMenuMessage(userId, 999, 65, groupChatId);
+
+  const first = fakeCtx('member', userId);
+  await handleDeclineAction(first.ctx); // first-ever response this week is a decline, nothing to remember
+
+  const second = fakeCtx('member', userId);
+  await handleDeclineAction(second.ctx);
+
+  assert.equal(getAwaitingChatId(userId), groupChatId);
+  assert.equal(second.replies.some((r) => /Куди хочеться/.test(r)), true);
+});
+
+test('handleResubmitDeclinedAction resubmits the retracted place and announces it to the group', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+
+  const userId = 11022;
+  const groupChatId = -10022;
+  submitPlace(groupChatId, userId, 'tester', 'https://www.instagram.com/somewhere');
+  setMenuMessage(userId, 999, 66, groupChatId);
+  t.mock.timers.tick(10_001); // past the resubmit cooldown, otherwise this looks rate_limited
+
+  await handleDeclineAction(fakeCtx('member', userId).ctx); // remembers the place, then...
+  const { ctx, sentMessages } = fakeCtx('member', userId);
+  await handleResubmitDeclinedAction(ctx); // ...offers it straight back
+
+  assert.equal(getAllSubmissions(groupChatId)[0]?.place, 'https://www.instagram.com/somewhere');
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].chatId, groupChatId);
+  assert.match(sentMessages[0].text, /somewhere/);
+});
+
+test('handleResubmitDeclinedAction refuses a user who is no longer a member, without resubmitting', async () => {
+  const userId = 11023;
+  const groupChatId = -10023;
+  setMenuMessage(userId, 999, 67, groupChatId);
+
+  const { ctx, sentMessages } = fakeCtx('left', userId);
+  await handleResubmitDeclinedAction(ctx);
+
+  assert.equal(sentMessages.length, 0);
+  assert.equal(getAllSubmissions(groupChatId).length, 0);
+});
+
+test('handleResubmitDeclinedAction refuses a blocked user, without resubmitting', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+
+  const userId = 11025;
+  const groupChatId = -10025;
+  submitPlace(groupChatId, userId, 'tester', 'https://www.instagram.com/somewhere');
+  setMenuMessage(userId, 999, 68, groupChatId);
+  t.mock.timers.tick(10_001);
+  await handleDeclineAction(fakeCtx('member', userId).ctx);
+  blockUserFromGroup(groupChatId, userId, 'tester', 999);
+
+  const { ctx, sentMessages } = fakeCtx('member', userId);
+  await handleResubmitDeclinedAction(ctx);
+
+  assert.equal(sentMessages.length, 0);
+  assert.equal(getAllSubmissions(groupChatId).length, 0);
+});
+
+test('handleResubmitDeclinedAction falls back to the free-text prompt when nothing is remembered', async () => {
+  const userId = 11024;
+  const groupChatId = -10024;
+  setMenuMessage(userId, 999, 69, groupChatId); // never declined anything — nothing remembered
+
+  const { ctx, replies } = fakeCtx('member', userId);
+  await handleResubmitDeclinedAction(ctx);
+
+  assert.equal(getAwaitingChatId(userId), groupChatId);
+  assert.equal(replies.some((r) => /Куди хочеться/.test(r)), true);
+});
+
 test('handleGroupDeclineAction is idempotent — a second tap after already declining does not cancel it', async () => {
   const groupChatId = -10020;
   const userId = 11020;
@@ -372,4 +477,36 @@ test('handleSubmitAction shows a staleness toast and does not start the prompt w
   assert.equal(alerts.some((a) => a.show_alert && /застаріла/.test(a.text ?? '')), true);
   assert.equal(getAwaitingChatId(userId), undefined);
   assert.equal(replies.length, 0);
+});
+
+test('handleResubmitDeclinedAction shows a staleness toast and does not resubmit when the tapped card is stale', async () => {
+  const userId = 11030;
+  const groupChatId = -10030;
+  submitPlace(groupChatId, userId, 'tester', 'https://www.instagram.com/somewhere');
+  declinePlace(groupChatId, userId, 'tester'); // remembers the place directly, bypassing the UI
+  setMenuMessage(userId, 999, 75, groupChatId); // the real, current card is message 75
+
+  const { ctx, alerts, sentMessages } = fakeCtx('member', userId, { tappedMessageId: 76 }); // a different, stale card
+  await handleResubmitDeclinedAction(ctx);
+
+  assert.equal(alerts.some((a) => a.show_alert && /застаріла/.test(a.text ?? '')), true);
+  assert.equal(sentMessages.length, 0);
+});
+
+test('handleResubmitDeclinedAction resubmits normally when the tapped card matches the currently tracked one', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+
+  const userId = 11031;
+  const groupChatId = -10031;
+  submitPlace(groupChatId, userId, 'tester', 'https://www.instagram.com/somewhere');
+  declinePlace(groupChatId, userId, 'tester');
+  setMenuMessage(userId, 999, 77, groupChatId);
+  t.mock.timers.tick(10_001); // past the resubmit cooldown, otherwise this looks rate_limited
+
+  const { ctx, alerts, sentMessages } = fakeCtx('member', userId, { tappedMessageId: 77 });
+  await handleResubmitDeclinedAction(ctx);
+
+  assert.equal(alerts.some((a) => /застаріла/.test(a.text ?? '')), false);
+  assert.equal(sentMessages.length, 1);
+  assert.match(sentMessages[0].text, /somewhere/);
 });

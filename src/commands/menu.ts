@@ -1,21 +1,31 @@
-import type { Context } from 'telegraf';
-import { escapeHtml, placeLink } from '../htmlFormat.js';
+import { Markup, type Context } from 'telegraf';
+import { escapeHtml, placeLabel, placeLink } from '../htmlFormat.js';
 import { isChatMember } from './access.js';
-import { promptForPlace } from './add.js';
+import { PLACE_LINK_FORMAT_HINT, promptForPlace } from './add.js';
 import { DECLINE_GROUP_ACTION } from './keyboard.js';
 import { buildMenuKeyboard, buildMenuText, DECLINE_ACTION, sendMenuMessage, SUBMIT_ACTION, updateMenuMessage } from './menuMessage.js';
 import { safeAnswerCbQuery } from './panel.js';
 import {
   declinePlace,
+  getDeclinedPlace,
   getUserSubmission,
   isGroupPaused,
   isSubmissionLocked,
   isUserBlocked,
+  MAX_PLACE_LENGTH,
+  submitPlace,
+  type SubmitResult,
 } from '../services/submissionService.js';
 import { getMenuMessage } from '../storage/menuMessages.js';
 import { sendToChat } from '../telegramBroadcast.js';
 
 export { SUBMIT_ACTION, DECLINE_ACTION, DECLINE_GROUP_ACTION };
+
+// Bare action (no group/place embedded in callback_data) — same reasoning as SUBMIT_ACTION/
+// DECLINE_ACTION: this screen is itself the tracked private-chat menu card, so
+// handleResubmitDeclinedAction below recovers the group from getMenuMessage the same way
+// handleSubmitAction does.
+export const RESUBMIT_DECLINED_ACTION = 'resubmit_declined';
 
 // Exported so text.ts's rejection replies for the same two states reuse these literals instead of
 // retyping them — one string each, so wording can't drift between "opening the menu while
@@ -67,6 +77,87 @@ async function renderGateIfBlocked(ctx: Context, groupChatId: number, userId: nu
   }
 
   return false;
+}
+
+function buildCancelDeclineText(): string {
+  return 'Плани зміняться? Можеш повернути минулий варіант або ввести нове посилання 👇';
+}
+
+// One button for the exact place this decline retracted, plus a way to type a fresh link instead
+// — reusing SUBMIT_ACTION directly since this screen is itself the tracked menu card
+// handleSubmitAction already knows how to read the group from.
+function buildCancelDeclineKeyboard(place: string) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback(`📍 ${placeLabel(place)}`, RESUBMIT_DECLINED_ACTION)],
+    [Markup.button.callback('✍️ Ввести нове посилання', SUBMIT_ACTION)],
+  ]);
+}
+
+// Shared by handleDeclineAction's "cancel не йду" branch and handleResubmitDeclinedAction below — the
+// exact same confirmation/rejection rendering + group announcement text.ts's handleTextMessage
+// uses for a typed submission, factored out so both a typed link and a one-tap quick-pick produce
+// byte-identical outcomes. retryKeyboard is only used for the too-long/invalid-format/rate-limited
+// branch, since that's the one case whose keyboard differs by caller: text.ts wants the "⬅️
+// Скасувати" keyboard (the user is still "awaiting" a typed reply), while a quick-pick tap has no
+// such pending text state to cancel.
+export async function renderSubmitOutcome(
+  ctx: Context,
+  groupChatId: number,
+  userId: number,
+  username: string,
+  place: string,
+  result: SubmitResult,
+  retryKeyboard: ReturnType<typeof Markup.inlineKeyboard> | undefined,
+): Promise<void> {
+  if (!result.ok) {
+    if (result.reason === 'too_long' || result.reason === 'rate_limited' || result.reason === 'invalid_format') {
+      const text =
+        result.reason === 'too_long'
+          ? `✂️ Ого, це ціла історія! Стисни до ${MAX_PLACE_LENGTH} символів — і все вийде.`
+          : result.reason === 'invalid_format'
+            ? PLACE_LINK_FORMAT_HINT
+            : '⏳ Не поспішай так — ще трохи і зможеш змінити знову.';
+      await updateMenuMessage(ctx, groupChatId, userId, text, retryKeyboard);
+      return;
+    }
+
+    const text =
+      result.reason === 'locked'
+        ? '🔒 Запізно — заявки на цей тиждень уже закрито. До зустрічі наступного тижня!'
+        : result.reason === 'paused'
+          ? PAUSED_MESSAGE
+          : result.reason === 'blocked'
+            ? BLOCKED_MESSAGE
+            : `Це вже твій поточний варіант — міняти нічого 😉\n\n${buildMenuText(groupChatId, userId)}`;
+    const keyboard =
+      result.reason === 'locked' || result.reason === 'paused' || result.reason === 'blocked'
+        ? undefined
+        : buildMenuKeyboard(groupChatId, userId);
+    await updateMenuMessage(ctx, groupChatId, userId, text, keyboard);
+    return;
+  }
+
+  const previousPlace = result.previousPlace;
+  const confirmation =
+    previousPlace !== undefined
+      ? `Готово! Змінено на: ${placeLink(place)} (було: ${placeLink(previousPlace)}) 👍`
+      : `Готово! Додано: ${placeLink(place)} 🎉`;
+
+  await updateMenuMessage(
+    ctx,
+    groupChatId,
+    userId,
+    `${confirmation}\n\n${buildMenuText(groupChatId, userId)}`,
+    buildMenuKeyboard(groupChatId, userId),
+  );
+  await sendToChat(
+    ctx.telegram,
+    groupChatId,
+    previousPlace !== undefined
+      ? `🔄 <b>${escapeHtml(username)}</b> оновлює варіант: ${placeLink(place)}`
+      : `🍽 <b>${escapeHtml(username)}</b> пропонує варіант: ${placeLink(place)}`,
+    { parse_mode: 'HTML' },
+  );
 }
 
 export async function showPersonalMenu(ctx: Context, groupChatId: number): Promise<void> {
@@ -139,10 +230,15 @@ export async function handleDeclineAction(ctx: Context): Promise<void> {
 
   if (result.ok && !result.declined) {
     // Cancelling "не йду" means the user is coming after all and has no place submitted either
-    // (declining always drops any previous place) — go straight into the same "send me a link"
-    // prompt as SUBMIT_ACTION rather than back to an idle menu, since a place is exactly what's
-    // missing now. The eventual submitPlace() call announces it to the group as a normal, fresh
-    // submission — no separate announcement needed for the cancel itself.
+    // (declining always drops any previous place) — a place is exactly what's missing now. If
+    // this decline retracted a real place, offer that exact one back as a one-tap shortcut
+    // instead of always forcing a retyped link; with nothing to offer, fall through to the same
+    // "send me a link" prompt as SUBMIT_ACTION.
+    const declinedPlace = getDeclinedPlace(groupChatId, userId);
+    if (declinedPlace !== undefined) {
+      await updateMenuMessage(ctx, groupChatId, userId, buildCancelDeclineText(), buildCancelDeclineKeyboard(declinedPlace));
+      return;
+    }
     await promptForPlace(ctx, groupChatId);
     return;
   }
@@ -224,4 +320,42 @@ export async function handleGroupDeclineAction(ctx: Context): Promise<void> {
   }
 
   await safeAnswerCbQuery(ctx, '🙅 Записано: не йдеш цього тижня.');
+}
+
+// One-tap resubmission of the exact place the current decline retracted (buildCancelDeclineKeyboard
+// above) — mirrors handleSubmitAction's shape (bare action, group recovered from the tracked menu
+// message) since this quick-pick screen is itself that same tracked card.
+export async function handleResubmitDeclinedAction(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+  const groupChatId = userId !== undefined ? getMenuMessage(userId)?.groupChatId : undefined;
+  if (!userId || groupChatId === undefined) {
+    if (ctx.callbackQuery) await safeAnswerCbQuery(ctx);
+    return;
+  }
+
+  if (isStaleMenuTap(ctx, userId)) {
+    await safeAnswerCbQuery(ctx, STALE_MENU_TAP_MESSAGE, { show_alert: true });
+    return;
+  }
+
+  await safeAnswerCbQuery(ctx);
+
+  if (!(await isChatMember(ctx, groupChatId, userId))) {
+    await ctx.reply('🔒 Здається, ти вже не в цій групі.');
+    return;
+  }
+
+  if (await renderGateIfBlocked(ctx, groupChatId, userId)) return;
+
+  // Gone (already used, or the week reset since this screen was shown) — nothing to resubmit, so
+  // fall back to the normal "send me a link" prompt instead of silently doing nothing.
+  const place = getDeclinedPlace(groupChatId, userId);
+  if (place === undefined) {
+    await promptForPlace(ctx, groupChatId);
+    return;
+  }
+
+  const username = ctx.from?.username ?? ctx.from?.first_name ?? 'Хтось';
+  const result = submitPlace(groupChatId, userId, username, place);
+  await renderSubmitOutcome(ctx, groupChatId, userId, username, place, result, buildMenuKeyboard(groupChatId, userId));
 }
