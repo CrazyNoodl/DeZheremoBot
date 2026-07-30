@@ -1,11 +1,17 @@
+import * as Sentry from '@sentry/node';
 import { Markup, type Context } from 'telegraf';
 import { escapeHtml, placeLink } from '../htmlFormat.js';
+import { getSchedule } from '../services/scheduleService.js';
 import { getUserSubmission } from '../services/submissionService.js';
 import { getGroupChatTitle } from '../storage/groupChats.js';
 import { clearMenuMessage, getMenuMessage, setMenuMessage } from '../storage/menuMessages.js';
 
 export const SUBMIT_ACTION = 'submit';
 export const DECLINE_ACTION = 'decline';
+
+// Same weekday labeling as schedule.ts's/help.ts's own copies — duplicated rather than shared, since
+// it's one short const array and this file has no other reason to depend on either of theirs.
+const WEEKDAY_LABELS = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
 // Telegram bots can't edit messages older than this — once a menu message ages
 // out of that window, delete it instead of leaving a dead card in the chat.
@@ -18,14 +24,22 @@ export function withGroupLabel(groupChatId: number, text: string): string {
   return title ? `📍 ${escapeHtml(title)}\n\n${text}` : text;
 }
 
+// e.g. "Пт, 18:00" — shown at the top of the menu card so a member can see when submissions
+// close without having to separately open /help.
+function deadlineLabel(groupChatId: number): string {
+  const schedule = getSchedule(groupChatId);
+  return `${WEEKDAY_LABELS[schedule.deadlineWeekday]}, ${schedule.lockTime}`;
+}
+
 export function buildMenuText(groupChatId: number, userId: number): string {
   const submission = getUserSubmission(groupChatId, userId);
+  const deadlineLine = `<i>⏰ Дедлайн: ${deadlineLabel(groupChatId)}</i>\n\n`;
   if (submission?.status === 'declined') {
-    return '🙅 Записано: цього тижня ти не йдеш.\n\nПлани зміняться — тисни кнопку нижче 👇';
+    return `${deadlineLine}🙅 Записано: цього тижня ти не йдеш.\n\nПлани зміняться — тисни кнопку нижче 👇`;
   }
   return submission
-    ? `📍 Твій варіант цього тижня: ${placeLink(submission.place)}\n\nХочеш змінити — тисни кнопку нижче 👇`
-    : '🤔 Ще нема варіанту на цей тиждень? Додай посилання на заклад — тисни кнопку нижче 👇';
+    ? `${deadlineLine}📍 Твій варіант цього тижня: ${placeLink(submission.place)}\n\nХочеш змінити — тисни кнопку нижче 👇`
+    : `${deadlineLine}🤔 Ще нема варіанту на цей тиждень? Додай посилання на заклад — тисни кнопку нижче 👇`;
 }
 
 export function buildMenuKeyboard(groupChatId: number, userId: number) {
@@ -92,6 +106,7 @@ export async function updateMenuMessage(
       // Logged at warn rather than error: expected to happen occasionally, but a spike would
       // otherwise be invisible.
       console.warn(`[menuMessage] edit failed for user ${userId}, sending a fresh message instead:`, err);
+      Sentry.captureException(err);
     }
   }
 

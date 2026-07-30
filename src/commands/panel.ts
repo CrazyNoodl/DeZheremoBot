@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/node';
 import { Markup, TelegramError, type Context } from 'telegraf';
 import { createPanelMessageStore, type PanelMessageRef } from '../storage/panelMessages.js';
 
@@ -53,6 +54,7 @@ export function createPanel(ttlMs: number, logLabel: string) {
           return;
         }
         console.warn(`[${logLabel}] panel edit failed for user ${userId}, sending a fresh message instead:`, err);
+        Sentry.captureException(err);
       }
     }
 
