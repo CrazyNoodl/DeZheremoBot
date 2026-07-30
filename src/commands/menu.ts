@@ -34,6 +34,14 @@ export const PAUSED_MESSAGE = '⏸ Цього тижня ДеЖеремо на �
 export const BLOCKED_MESSAGE = '🚫 Тебе заблокували в цій групі — додавати заявки більше не можна.';
 const LOCKED_MESSAGE = '🔒 Заявки на цей тиждень уже закрито';
 
+// Single source of truth for this three-way message, so handleGroupDeclineAction's upfront gate
+// and its post-declinePlace race-condition fallback below can't drift apart from each other.
+function gateMessageFor(reason: 'blocked' | 'paused' | 'locked'): string {
+  if (reason === 'blocked') return BLOCKED_MESSAGE;
+  if (reason === 'paused') return PAUSED_MESSAGE;
+  return LOCKED_MESSAGE;
+}
+
 const STALE_MENU_TAP_MESSAGE = '🔄 Ця картка вже застаріла — онови меню командою /start, там уже інший стан.';
 
 // Telegram never expires old inline buttons — if the tapped message isn't the one this user's
@@ -279,18 +287,9 @@ export async function handleGroupDeclineAction(ctx: Context): Promise<void> {
     return;
   }
 
-  if (isUserBlocked(chatId, userId)) {
-    await safeAnswerCbQuery(ctx, BLOCKED_MESSAGE, { show_alert: true });
-    return;
-  }
-
-  if (isGroupPaused(chatId)) {
-    await safeAnswerCbQuery(ctx, PAUSED_MESSAGE, { show_alert: true });
-    return;
-  }
-
-  if (isSubmissionLocked(chatId)) {
-    await safeAnswerCbQuery(ctx, LOCKED_MESSAGE, { show_alert: true });
+  const gateReason = isUserBlocked(chatId, userId) ? 'blocked' : isGroupPaused(chatId) ? 'paused' : isSubmissionLocked(chatId) ? 'locked' : undefined;
+  if (gateReason) {
+    await safeAnswerCbQuery(ctx, gateMessageFor(gateReason), { show_alert: true });
     return;
   }
 
@@ -304,9 +303,7 @@ export async function handleGroupDeclineAction(ctx: Context): Promise<void> {
 
   if (!result.ok) {
     // Rare race — state changed between the checks above and this call. Same messages as above.
-    const message =
-      result.reason === 'blocked' ? BLOCKED_MESSAGE : result.reason === 'paused' ? PAUSED_MESSAGE : LOCKED_MESSAGE;
-    await safeAnswerCbQuery(ctx, message, { show_alert: true });
+    await safeAnswerCbQuery(ctx, gateMessageFor(result.reason), { show_alert: true });
     return;
   }
 
