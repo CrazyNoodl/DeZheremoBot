@@ -6,6 +6,7 @@ import { handleMyChatMember, handleNewChatTitle } from './commands/groupChat.js'
 import { handleHelpCommand } from './commands/help.js';
 import { buildGroupMenu, DECLINE_GROUP_ACTION, START_ADD_PREFIX, START_LIST_PREFIX } from './commands/keyboard.js';
 import { showSubmissionsList } from './commands/list.js';
+import { handleReleaseNotesCommand } from './commands/releaseNotes.js';
 import {
   DECLINE_ACTION,
   handleDeclineAction,
@@ -61,6 +62,7 @@ bot.command('schedule', handleScheduleCommand);
 bot.action(/^admin:/, handleAdminAction);
 bot.command('admin', handleAdminCommand);
 bot.command('help', handleHelpCommand);
+bot.command('releasenotes', handleReleaseNotesCommand);
 bot.on('text', handleTextMessage);
 
 bot.launch(() => {
