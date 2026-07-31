@@ -110,7 +110,7 @@ test('buildMenuText shows the "no submission yet" text with the group\'s actual 
 
   const text = buildMenuText(groupChatId, userId);
 
-  assert.match(text, /Ще нема варіанту/);
+  assert.match(text, /поки що порожньо/);
   assert.match(text, /Ср, 19:30/); // Wednesday (index 3), distinct from DEFAULT_SCHEDULE's Пт 18:00
 });
 

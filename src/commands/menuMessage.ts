@@ -39,7 +39,7 @@ export function buildMenuText(groupChatId: number, userId: number): string {
   }
   return submission
     ? `${deadlineLine}📍 Твій варіант цього тижня: ${placeLink(submission.place)}\n\nХочеш змінити — тисни кнопку нижче 👇`
-    : `${deadlineLine}🤔 Ще нема варіанту на цей тиждень? Додай посилання на заклад — тисни кнопку нижче 👇`;
+    : `${deadlineLine}🍽 На цей тиждень поки що порожньо — стань першим і запропонуй заклад, тисни кнопку нижче 👇`;
 }
 
 export function buildMenuKeyboard(groupChatId: number, userId: number) {
