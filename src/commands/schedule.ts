@@ -114,7 +114,6 @@ export async function handleScheduleCommand(ctx: Context): Promise<void> {
     ctx,
     'sched',
     {
-      notPrivate: '⚙️ Розклад можна змінити лише у приватному чаті з ботом — напиши мені /schedule тут.',
       noAdminGroups: '🔒 Ти не адміністратор жодної групи, де я є.',
       pickGroup: 'Обери групу, розклад якої хочеш змінити:',
     },

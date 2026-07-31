@@ -127,7 +127,6 @@ export async function handleAdminCommand(ctx: Context): Promise<void> {
     ctx,
     'admin',
     {
-      notPrivate: '🛠 Керувати циклом можна лише у приватному чаті з ботом — напиши мені /admin тут.',
       noAdminGroups: '🔒 Ти не адміністратор жодної групи, де я є.',
       pickGroup: 'Обери групу, циклом якої хочеш керувати:',
     },

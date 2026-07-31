@@ -74,17 +74,16 @@ export async function showGatedMenu(
 // directly in a private chat (no chat-id context of their own), so both need the same
 // private-chat-only check, then either open the panel directly (exactly one admin group) or show
 // a group picker (more than one) — differing only in wording, callback namespace, and which panel
-// "show" opens.
+// "show" opens. Typed in a group instead, it's silently ignored rather than replying with a
+// "DM me instead" notice — a group can have several admins and/or a spammer retyping /admin or
+// /schedule, and every stray reply is one more message cluttering the group for everyone in it.
 export async function handleAdminEntryCommand(
   ctx: Context,
   namespace: string,
-  messages: { notPrivate: string; noAdminGroups: string; pickGroup: string },
+  messages: { noAdminGroups: string; pickGroup: string },
   show: (ctx: Context, chatId: number) => Promise<void>,
 ): Promise<void> {
-  if (ctx.chat?.type !== 'private') {
-    await ctx.reply(messages.notPrivate);
-    return;
-  }
+  if (ctx.chat?.type !== 'private') return;
 
   const userId = ctx.from?.id;
   if (!userId) return;

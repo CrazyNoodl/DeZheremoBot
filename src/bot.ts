@@ -52,7 +52,7 @@ bot.start(async (ctx) => {
   }
 
   addGroupChat(ctx.chat.id, ctx.chat.title); // backfills the title for chats registered before it was tracked
-  await ctx.reply('Обирай дію: (команда /help розкаже, як усе працює)', buildGroupMenu(ctx.botInfo.username, ctx.chat.id));
+  await ctx.reply('Обирай дію: (команда /help у приватному чаті зі мною розкаже, як усе працює)', buildGroupMenu(ctx.botInfo.username, ctx.chat.id));
 });
 
 bot.on('my_chat_member', handleMyChatMember);
