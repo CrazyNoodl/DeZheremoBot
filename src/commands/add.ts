@@ -1,6 +1,11 @@
 import * as Sentry from '@sentry/node';
 import { Markup, type Context } from 'telegraf';
-import { clearAwaitingSubmission, getAwaitingChatId, isCurrentAwaitingToken, markAwaitingSubmission } from '../storage/pendingState.js';
+import {
+  clearAwaitingSubmission,
+  getAwaitingChatId,
+  isCurrentAwaitingToken,
+  markAwaitingSubmission,
+} from '../storage/pendingState.js';
 import { buildMenuKeyboard, buildMenuText, updateMenuMessage } from './menuMessage.js';
 import { safeAnswerCbQuery } from './panel.js';
 
@@ -9,7 +14,7 @@ import { safeAnswerCbQuery } from './panel.js';
 // identically in both places.
 export const PLACE_LINK_FORMAT_HINT =
   '🔗 Поки що приймаються тільки посилання на заклад:\n' +
-  '• expz.menu — напр. https://expz.menu/d0838ea9-b9ae-44dd-b99d-993f0a0206fd\n' +
+  '• Expirenza — напр. https://expz.menu/d0838ea9-b9ae-44dd-b99d-993f0a0206fd\n' +
   '• Google Maps — напр. https://maps.app.goo.gl/uKwFMyv1DMrUtZua8\n' +
   '• Instagram — напр. https://www.instagram.com/milkbarkyiv\n\n' +
   'Спробуй ще раз 👇';
@@ -18,7 +23,9 @@ export const PLACE_LINK_FORMAT_HINT =
 // in commands/text.ts reuse this exact keyboard) so someone who tapped "✏️ Змінити"/"➕ Додати" but
 // changed their mind isn't stuck either typing a link or waiting out the 1h TTL.
 export const CANCEL_AWAITING_ACTION = 'cancel_awaiting';
-export const CANCEL_AWAITING_KEYBOARD = Markup.inlineKeyboard([[Markup.button.callback('⬅️ Скасувати', CANCEL_AWAITING_ACTION)]]);
+export const CANCEL_AWAITING_KEYBOARD = Markup.inlineKeyboard([
+  [Markup.button.callback('⬅️ Скасувати', CANCEL_AWAITING_ACTION)],
+]);
 
 // commands/text.ts checks getAwaitingChatId before treating a message as a submission, so a prompt
 // left unanswered (user abandons it, or gets here via handleDeclineAction's cancel and never
@@ -39,22 +46,28 @@ export async function promptForPlace(ctx: Context, groupChatId: number): Promise
     // Runs on a bare setTimeout, outside any Telegraf handler — unlike every other
     // updateMenuMessage call in this codebase, a throw here has no bot.catch(...) safety net to
     // land in, so it must be logged here directly rather than silently swallowed.
-    updateMenuMessage(ctx, groupChatId, userId, buildMenuText(groupChatId, userId), buildMenuKeyboard(groupChatId, userId)).catch(
-      (err) => {
-        console.error(`[add] TTL revert failed for user ${userId}:`, err);
-        Sentry.captureException(err);
-      },
-    );
+    updateMenuMessage(
+      ctx,
+      groupChatId,
+      userId,
+      buildMenuText(groupChatId, userId),
+      buildMenuKeyboard(groupChatId, userId),
+    ).catch((err) => {
+      console.error(`[add] TTL revert failed for user ${userId}:`, err);
+      Sentry.captureException(err);
+    });
   }, AWAITING_SUBMISSION_TTL_MS);
 
   await updateMenuMessage(
     ctx,
     groupChatId,
     userId,
-    '🍽 Куди хочеться цього разу? Надішли посилання на заклад — з expz.menu, Google Maps ' +
-      '(maps.app.goo.gl) або Instagram.\n\n' +
-      'Наприклад: https://expz.menu/d0838ea9-b9ae-44dd-b99d-993f0a0206fd, ' +
-      'https://maps.app.goo.gl/uKwFMyv1DMrUtZua8 або https://www.instagram.com/milkbarkyiv',
+    '🍽 Куди хочеться цього разу? \n Надішли посилання на заклад — з Expirenza, Google Maps ' +
+      'або Instagram.\n\n' +
+      'Наприклад:\n' +
+      '• https://expz.menu/d0838ea9-b9ae-44dd-b99d-993f0a0206fd\n' +
+      '• https://maps.app.goo.gl/uKwFMyv1DMrUtZua8\n' +
+      '• https://www.instagram.com/milkbarkyiv',
     CANCEL_AWAITING_KEYBOARD,
   );
 }
@@ -75,5 +88,11 @@ export async function handleCancelAwaitingAction(ctx: Context): Promise<void> {
   if (groupChatId === undefined) return;
 
   clearAwaitingSubmission(userId);
-  await updateMenuMessage(ctx, groupChatId, userId, buildMenuText(groupChatId, userId), buildMenuKeyboard(groupChatId, userId));
+  await updateMenuMessage(
+    ctx,
+    groupChatId,
+    userId,
+    buildMenuText(groupChatId, userId),
+    buildMenuKeyboard(groupChatId, userId),
+  );
 }

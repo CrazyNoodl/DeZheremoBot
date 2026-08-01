@@ -11,6 +11,7 @@ import { getNonSubmittersInfo } from './services/reminderService.js';
 import { getFinalReminderWeekday } from './services/scheduleService.js';
 import {
   isGroupPaused,
+  isRepeatWinner,
   lockSubmissions,
   pickWeeklyWinner,
   recordDraw,
@@ -132,6 +133,9 @@ export function runSchedulerTick(bot: Telegraf, now: { weekday: number; time: st
       markFired(chatId, 'draw', date);
       if (!paused) {
         const winner = pickWeeklyWinner(chatId);
+        // Computed before recordDraw persists this draw — afterward getLatestDraw would return the
+        // draw just recorded instead of the previous week's, always reporting a "repeat".
+        const isRepeat = isRepeatWinner(chatId, winner);
         recordDraw(chatId, winner);
         // resetWeek runs synchronously, right after recordDraw and before the network call below —
         // not chained off sendToChat's promise. Gating the reset on the send meant a crash during
@@ -139,7 +143,7 @@ export function runSchedulerTick(bot: Telegraf, now: { weekday: number; time: st
         // 'draw' done for today) until the following week's draw. Unlocking is local, durable state;
         // the announcement is best-effort UI feedback and can safely fail independently.
         resetWeek(chatId);
-        sendToChat(bot.telegram, chatId, buildDrawAnnouncement(winner), { parse_mode: 'HTML' });
+        sendToChat(bot.telegram, chatId, buildDrawAnnouncement(winner, isRepeat), { parse_mode: 'HTML' });
       }
     }
 

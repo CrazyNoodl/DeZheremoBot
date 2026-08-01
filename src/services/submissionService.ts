@@ -5,7 +5,7 @@ import {
   getDeclinedPlace as getRememberedDeclinedPlace,
   rememberDeclinedPlace,
 } from '../storage/declinedPlace.js';
-import { recordDraw as persistDraw } from '../storage/history.js';
+import { getLatestDraw, recordDraw as persistDraw } from '../storage/history.js';
 import { isLocked, lock, unlock } from '../storage/lockState.js';
 import { isPaused, pause, resume } from '../storage/pauseState.js';
 import { msSinceLastSubmit, recordSubmitTime } from '../storage/rateLimit.js';
@@ -210,6 +210,16 @@ export function resetWeek(chatId: number): void {
   // A fresh week means nothing left over from the last one — without this, a decline remembered
   // two weeks ago could resurface as a quick-pick option in a week that never touched it.
   clearDeclinedPlacesForChat(chatId);
+}
+
+// Whether this winner's place is the same as the chat's previous draw — used to flag a back-to-back
+// repeat for the announcement. Must be called before recordDraw persists the new draw: afterward,
+// getLatestDraw would return the just-recorded draw itself instead of the prior week's, always
+// reporting a "repeat".
+export function isRepeatWinner(chatId: number, winner: Submission | undefined): boolean {
+  if (!winner) return false;
+  const previous = getLatestDraw(chatId);
+  return previous?.winnerPlace === winner.place;
 }
 
 export function recordDraw(chatId: number, winner: Submission | undefined): void {

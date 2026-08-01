@@ -6,6 +6,7 @@ import {
   getAllSubmissions,
   getDeclinedPlace,
   isGroupPaused,
+  isRepeatWinner,
   isSubmissionLocked,
   isUserBlocked,
   isValidPlaceLink,
@@ -244,6 +245,42 @@ test('recordDraw does not add a decliner to getHistoricalSubmitters', () => {
 
   const submitters = getHistoricalSubmitters(-9025).map((s) => s.userId);
   assert.deepEqual(submitters, [1]);
+});
+
+test('isRepeatWinner is false when the chat has no previous draw', () => {
+  submitPlace(-9031, 1, 'artem', DEZHEROMA_LINK);
+  const winner = pickWeeklyWinner(-9031);
+
+  assert.equal(isRepeatWinner(-9031, winner), false);
+});
+
+test('isRepeatWinner is true when the same place wins two weeks running', () => {
+  submitPlace(-9032, 1, 'artem', DEZHEROMA_LINK);
+  recordDraw(-9032, pickWeeklyWinner(-9032));
+  resetWeek(-9032);
+
+  // A different user proposes the same place the following week — same-user resubmission within
+  // the test's own rate-limit window would otherwise be rejected as 'rate_limited', not because of
+  // anything isRepeatWinner itself is checking.
+  submitPlace(-9032, 2, 'olya', DEZHEROMA_LINK);
+  const secondWinner = pickWeeklyWinner(-9032);
+
+  assert.equal(isRepeatWinner(-9032, secondWinner), true);
+});
+
+test('isRepeatWinner is false when a different place wins the following week', () => {
+  submitPlace(-9033, 1, 'artem', DEZHEROMA_LINK);
+  recordDraw(-9033, pickWeeklyWinner(-9033));
+  resetWeek(-9033);
+
+  submitPlace(-9033, 2, 'olya', PUZATA_HATA_LINK);
+  const secondWinner = pickWeeklyWinner(-9033);
+
+  assert.equal(isRepeatWinner(-9033, secondWinner), false);
+});
+
+test('isRepeatWinner is false when there is no winner this week', () => {
+  assert.equal(isRepeatWinner(-9034, undefined), false);
 });
 
 test('getDeclinedPlace is undefined when the user has never declined', () => {

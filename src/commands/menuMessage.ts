@@ -80,7 +80,11 @@ export async function sendMenuMessage(
   const privateChatId = ctx.chat?.id;
   if (!privateChatId) return;
 
-  const sent = await ctx.reply(withGroupLabel(groupChatId, text), { parse_mode: 'HTML', ...keyboard });
+  const sent = await ctx.reply(withGroupLabel(groupChatId, text), {
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+    ...keyboard,
+  });
   trackMenuMessage(ctx, groupChatId, userId, privateChatId, sent.message_id);
 }
 
@@ -97,6 +101,7 @@ export async function updateMenuMessage(
     try {
       await ctx.telegram.editMessageText(ref.chatId, ref.messageId, undefined, withGroupLabel(groupChatId, text), {
         parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
         ...keyboard,
       });
       setMenuMessage(userId, ref.chatId, ref.messageId, groupChatId); // this card now represents groupChatId's cycle

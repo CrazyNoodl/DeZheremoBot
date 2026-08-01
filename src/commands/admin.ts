@@ -8,6 +8,7 @@ import {
   blockUserFromGroup,
   getAllSubmissions,
   isGroupPaused,
+  isRepeatWinner,
   isSubmissionLocked,
   listBlockedUsersInGroup,
   pauseGroup,
@@ -244,6 +245,8 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
 
   if (action === 'draw') {
     const winner = pickWeeklyWinner(chatId);
+    // Computed before recordDraw persists this draw — see that function's own comment for why.
+    const isRepeat = isRepeatWinner(chatId, winner);
     recordDraw(chatId, winner);
     // Same ordering as scheduler.ts's own draw branch: reset before the network send, so a
     // crash/failure during that send never leaves the chat stuck locked.
@@ -258,7 +261,7 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
       action: 'draw',
       detail: winner ? `winner:${winner.userId}` : undefined,
     });
-    await sendToChat(ctx.telegram, chatId, buildDrawAnnouncement(winner), { parse_mode: 'HTML' });
+    await sendToChat(ctx.telegram, chatId, buildDrawAnnouncement(winner, isRepeat), { parse_mode: 'HTML' });
     await renderAdminPanel(ctx, userId, chatId);
     return;
   }

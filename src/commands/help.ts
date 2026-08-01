@@ -16,7 +16,8 @@ const HELP_TEXT =
   `оголошує переможця в групі.\n\n` +
   `За замовчуванням: нагадування Пн/Ср/Пт о 10:00, закриття заявок Пт 18:00, жеребкування Пт 18:15 — ` +
   `але адмін групи може змінити дні й час через приватну команду /schedule, а також керувати циклом ` +
-  `(пауза, форс-розіграш тощо) через /admin.`;
+  `(пауза, форс-розіграш тощо) через /admin.\n\n` +
+  `🐞 Знайшли баг або є пропозиція? Пишіть @crazy_noodl.`;
 
 // /help only replies in a private chat with the bot now — typed in a group it's silently ignored,
 // same as /admin and /schedule, so a group can't get spammed by a member retyping it repeatedly.
