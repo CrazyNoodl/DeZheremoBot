@@ -3,7 +3,9 @@ export type ScheduleEditState =
   | { flow: 'reminder'; step: 'time'; chatId: number; weekdays: number[] }
   | { flow: 'deadline'; step: 'weekday'; chatId: number }
   | { flow: 'deadline'; step: 'lockTime'; chatId: number; weekday: number }
-  | { flow: 'deadline'; step: 'drawTime'; chatId: number; weekday: number; lockTime: string };
+  | { flow: 'deadline'; step: 'drawTime'; chatId: number; weekday: number; lockTime: string }
+  | { flow: 'rating'; step: 'weekday'; chatId: number }
+  | { flow: 'rating'; step: 'time'; chatId: number; weekday: number };
 
 const editStates = new Map<number, ScheduleEditState>();
 

@@ -11,7 +11,10 @@ export type AdminAction =
   | 'reset_schedule'
   | 'remind'
   | 'edit_reminder'
-  | 'edit_deadline';
+  | 'edit_deadline'
+  | 'rating_toggle'
+  | 'edit_rating'
+  | 'send_rating_survey';
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS admin_actions (

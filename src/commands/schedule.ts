@@ -5,7 +5,9 @@ import {
   getSchedule,
   isValidTime,
   resetSchedule,
+  setRatingSurveyEnabled,
   updateDeadlineSchedule,
+  updateRatingSurveySchedule,
   updateReminderSchedule,
   type GroupScheduleConfig,
   type UpdateResult,
@@ -54,7 +56,8 @@ function buildSummaryText(config: GroupScheduleConfig): string {
   return (
     `⚙️ Розклад цієї групи\n\n` +
     `📅 Нагадування: ${formatWeekdays(config.reminderWeekdays)} о ${config.reminderTime}\n` +
-    `🔒 Дедлайн (${WEEKDAY_LABELS[config.deadlineWeekday]}): закриття заявок ${config.lockTime}, жеребкування ${config.drawTime}`
+    `🔒 Дедлайн (${WEEKDAY_LABELS[config.deadlineWeekday]}): закриття заявок ${config.lockTime}, жеребкування ${config.drawTime}\n` +
+    `⭐ Опитування: ${config.ratingSurveyEnabled ? `${WEEKDAY_LABELS[config.ratingSurveyWeekday]} о ${config.ratingSurveyTime}` : 'вимкнено'}`
   );
 }
 
@@ -62,8 +65,25 @@ function buildSummaryKeyboard(chatId: number) {
   return Markup.inlineKeyboard([
     [Markup.button.callback('✏️ Дні та час нагадувань', `sched:edit_reminder:${chatId}`)],
     [Markup.button.callback('✏️ День та час дедлайну', `sched:edit_deadline:${chatId}`)],
+    [Markup.button.callback('⭐ Опитування', `sched:rating:${chatId}`)],
     [Markup.button.callback('🔔 Надіслати нагадування зараз', `sched:remind:${chatId}`)],
     [Markup.button.callback('↩️ Скинути на дефолт', `sched:reset:${chatId}`)],
+  ]);
+}
+
+function buildRatingScreenText(config: GroupScheduleConfig): string {
+  return (
+    `⭐ Опитування з оцінкою закладу\n\n` +
+    `Стан: ${config.ratingSurveyEnabled ? 'увімкнено' : 'вимкнено'}\n` +
+    `День і час: ${WEEKDAY_LABELS[config.ratingSurveyWeekday]} о ${config.ratingSurveyTime}`
+  );
+}
+
+function buildRatingScreenKeyboard(chatId: number, config: GroupScheduleConfig) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback(config.ratingSurveyEnabled ? '🔕 Вимкнути' : '🔛 Увімкнути', `sched:rating_toggle:${chatId}`)],
+    [Markup.button.callback('✏️ Змінити день і час', `sched:rating_edit:${chatId}`)],
+    [Markup.button.callback('⬅️ Назад', `sched:select:${chatId}`)],
   ]);
 }
 
@@ -95,6 +115,18 @@ async function renderWeekdayToggleScreen(ctx: Context, userId: number, selected:
 
 async function renderDeadlineWeekdayScreen(ctx: Context, userId: number): Promise<void> {
   await panel.update(ctx, userId, 'Обери день дедлайну (закриття заявок + жеребкування):', buildWeekdaySingleSelectKeyboard());
+}
+
+async function renderRatingWeekdayScreen(ctx: Context, userId: number): Promise<void> {
+  await panel.update(ctx, userId, 'Обери день опитування з оцінкою:', buildWeekdaySingleSelectKeyboard());
+}
+
+async function renderRatingScreen(ctx: Context, userId: number, chatId: number): Promise<void> {
+  // Same as renderSummary: this is also the landing screen after the weekday/time wizard finishes,
+  // so any leftover wizard state must be cleared here too, not just on the main summary.
+  clearScheduleEditState(userId);
+  const config = getSchedule(chatId);
+  await panel.update(ctx, userId, buildRatingScreenText(config), buildRatingScreenKeyboard(chatId, config));
 }
 
 export async function showScheduleMenu(ctx: Context, chatId: number): Promise<void> {
@@ -141,7 +173,14 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
   // на дефолт" button stays pressable indefinitely) or mid-wizard, and without this, someone
   // demoted after opening /schedule could still rewrite that group's schedule.
   const targetChatId =
-    action === 'select' || action === 'edit_reminder' || action === 'edit_deadline' || action === 'reset' || action === 'remind'
+    action === 'select' ||
+    action === 'edit_reminder' ||
+    action === 'edit_deadline' ||
+    action === 'reset' ||
+    action === 'remind' ||
+    action === 'rating' ||
+    action === 'rating_toggle' ||
+    action === 'rating_edit'
       ? Number(arg)
       : action === 'day' || action === 'days_done' || action === 'back'
         ? getScheduleEditState(userId)?.chatId
@@ -214,9 +253,45 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
     return;
   }
 
+  if (action === 'rating') {
+    const chatId = Number(arg);
+    await renderRatingScreen(ctx, userId, chatId);
+    return;
+  }
+
+  if (action === 'rating_toggle') {
+    const chatId = Number(arg);
+    const next = !getSchedule(chatId).ratingSurveyEnabled;
+    setRatingSurveyEnabled(chatId, next);
+    logAdminAction({
+      chatId,
+      actorUserId: userId,
+      actorName: ctx.from?.username ?? ctx.from?.first_name,
+      action: 'rating_toggle',
+      detail: next ? 'on' : 'off',
+    });
+    await renderRatingScreen(ctx, userId, chatId);
+    return;
+  }
+
+  if (action === 'rating_edit') {
+    const chatId = Number(arg);
+    setScheduleEditStateWithTTL(userId, { flow: 'rating', step: 'weekday', chatId });
+    await renderRatingWeekdayScreen(ctx, userId);
+    return;
+  }
+
   if (action === 'back') {
     const state = getScheduleEditState(userId);
-    if (state) await renderSummary(ctx, userId, state.chatId);
+    if (!state) return;
+    // The rating wizard is entered from its own sub-screen (not the main summary, unlike
+    // reminder/deadline), so cancelling out of it must land back there too — same destination its
+    // successful-completion path already uses in handleScheduleTextStep.
+    if (state.flow === 'rating') {
+      await renderRatingScreen(ctx, userId, state.chatId);
+    } else {
+      await renderSummary(ctx, userId, state.chatId);
+    }
     return;
   }
 
@@ -243,6 +318,12 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
         'Введи час закриття прийому заявок (lock) у форматі ГГ:ХХ, напр. 18:00',
         CANCEL_KEYBOARD,
       );
+      return;
+    }
+
+    if (state.flow === 'rating' && state.step === 'weekday') {
+      setScheduleEditStateWithTTL(userId, { flow: 'rating', step: 'time', chatId: state.chatId, weekday: day });
+      await panel.update(ctx, userId, 'Введи час опитування у форматі ГГ:ХХ, напр. 15:00', CANCEL_KEYBOARD);
       return;
     }
     return;
@@ -335,6 +416,31 @@ export async function handleScheduleTextStep(ctx: Context, userId: number, text:
       });
     }
     await reportTimeResult(ctx, userId, state.chatId, result, 'Введи час жеребкування (draw) у форматі ГГ:ХХ, напр. 18:15');
+    return true;
+  }
+
+  if (state.flow === 'rating' && state.step === 'time') {
+    const result = updateRatingSurveySchedule(state.chatId, state.weekday, text);
+    if (!result.ok) {
+      await panel.update(
+        ctx,
+        userId,
+        '⚠️ Невірний формат. Введи час опитування у форматі ГГ:ХХ, напр. 15:00',
+        CANCEL_KEYBOARD,
+      );
+      return true;
+    }
+
+    logAdminAction({
+      chatId: state.chatId,
+      actorUserId: userId,
+      actorName: ctx.from?.username ?? ctx.from?.first_name,
+      action: 'edit_rating',
+      detail: `weekday:${state.weekday} time:${text}`,
+    });
+    // Lands back on the rating sub-screen, not the main summary — unlike reminder/deadline (whose
+    // wizards are entered directly from the summary), this one is entered from its own sub-screen.
+    await renderRatingScreen(ctx, userId, state.chatId);
     return true;
   }
 

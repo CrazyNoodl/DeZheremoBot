@@ -71,3 +71,19 @@ export function updateDeadlineSchedule(
 export function resetSchedule(chatId: number): void {
   resetGroupSchedule(chatId);
 }
+
+// No cross-field conflict is possible here the way reminder/deadline can conflict with each other:
+// the survey always targets the most recently completed draw, which is always in the past relative
+// to any future occurrence of any weekday/time, so 'invalid_time' is the only failure mode.
+export function updateRatingSurveySchedule(chatId: number, weekday: number, time: string): UpdateResult {
+  if (!isValidTime(time)) return { ok: false, reason: 'invalid_time' };
+
+  const current = getGroupSchedule(chatId);
+  setGroupSchedule(chatId, { ...current, ratingSurveyWeekday: weekday, ratingSurveyTime: time });
+  return { ok: true };
+}
+
+export function setRatingSurveyEnabled(chatId: number, enabled: boolean): void {
+  const current = getGroupSchedule(chatId);
+  setGroupSchedule(chatId, { ...current, ratingSurveyEnabled: enabled });
+}

@@ -12,7 +12,9 @@ const {
   getSchedule,
   isValidTime,
   resetSchedule,
+  setRatingSurveyEnabled,
   updateDeadlineSchedule,
+  updateRatingSurveySchedule,
   updateReminderSchedule,
 } = await import('./scheduleService.js');
 const { DEFAULT_SCHEDULE } = await import('../storage/groupSchedules.js');
@@ -104,4 +106,33 @@ test('getFinalReminderWeekday wraps across the week boundary', () => {
 
 test('getFinalReminderWeekday returns the only reminder when just one is configured', () => {
   assert.equal(getFinalReminderWeekday({ ...DEFAULT_SCHEDULE, reminderWeekdays: [2], deadlineWeekday: 5 }), 2);
+});
+
+test('updateRatingSurveySchedule rejects an invalid time and leaves the schedule untouched', () => {
+  const result = updateRatingSurveySchedule(-8009, 0, 'nope');
+
+  assert.deepEqual(result, { ok: false, reason: 'invalid_time' });
+  assert.deepEqual(getSchedule(-8009), DEFAULT_SCHEDULE);
+});
+
+test('updateRatingSurveySchedule applies a valid change', () => {
+  const result = updateRatingSurveySchedule(-8010, 3, '16:30');
+
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(getSchedule(-8010), { ...DEFAULT_SCHEDULE, ratingSurveyWeekday: 3, ratingSurveyTime: '16:30' });
+});
+
+test('setRatingSurveyEnabled toggles the flag without touching weekday/time', () => {
+  updateRatingSurveySchedule(-8011, 2, '12:00');
+
+  setRatingSurveyEnabled(-8011, false);
+  assert.deepEqual(getSchedule(-8011), {
+    ...DEFAULT_SCHEDULE,
+    ratingSurveyWeekday: 2,
+    ratingSurveyTime: '12:00',
+    ratingSurveyEnabled: false,
+  });
+
+  setRatingSurveyEnabled(-8011, true);
+  assert.equal(getSchedule(-8011).ratingSurveyEnabled, true);
 });

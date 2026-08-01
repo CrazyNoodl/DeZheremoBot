@@ -85,6 +85,33 @@ export function getHistoricalSubmitters(chatId: number): HistoricalSubmitter[] {
   );
 }
 
+const latestDrawStmt = db.prepare(`
+  SELECT id, drawn_at AS drawnAt, winner_place AS winnerPlace
+  FROM weekly_draws WHERE chat_id = ? ORDER BY id DESC LIMIT 1
+`);
+
+export interface LatestDraw {
+  id: number;
+  drawnAt: number;
+  winnerPlace: string | null;
+}
+
+// The rating survey fires on its own configured weekday, after that week's submissions table has
+// already been wiped by resetWeek — so it reads the durable draw record instead, not store.ts.
+export function getLatestDraw(chatId: number): LatestDraw | undefined {
+  return latestDrawStmt.get(chatId) as unknown as LatestDraw | undefined;
+}
+
+const submissionsForDrawStmt = db.prepare(`
+  SELECT user_id AS userId, username, place FROM submissions_history WHERE draw_id = ?
+`);
+
+// Every row here is already status==='submitted' only — recordDraw below never persists a
+// decliner's row — so this is already exactly the "who to ask to rate" roster, no filtering needed.
+export function getSubmissionsForDraw(drawId: number): HistorySubmission[] {
+  return submissionsForDrawStmt.all(drawId) as unknown as HistorySubmission[];
+}
+
 export function recordDraw(record: DrawRecord): void {
   insertDrawStmt.run(
     record.chatId,

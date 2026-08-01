@@ -15,6 +15,7 @@ const { addGroupChat } = await import('./storage/groupChats.js');
 const { setGroupSchedule } = await import('./storage/groupSchedules.js');
 const { hasFiredToday } = await import('./storage/firedEvents.js');
 const {
+  blockUserFromGroup,
   getAllSubmissions,
   isGroupPaused,
   isSubmissionLocked,
@@ -65,6 +66,9 @@ test('a plain reminder fires once reminderTime has passed and marks it fired for
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
+    ratingSurveyEnabled: false,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
   });
   const { bot, sentMessages } = fakeBot();
 
@@ -89,6 +93,9 @@ test('a reminder does not fire twice for the same calendar day', async () => {
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
+    ratingSurveyEnabled: false,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
   });
   const { bot, sentMessages } = fakeBot();
 
@@ -109,6 +116,9 @@ test('the reminder closest to the deadline is tagged with the non-submitter extr
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
+    ratingSurveyEnabled: false,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
   });
   const { bot, sentMessages } = fakeBot(2); // 2 known members, nobody has ever submitted in this chat
 
@@ -132,6 +142,9 @@ test('a reminder only fires for chats whose own schedule actually matches the ti
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
+    ratingSurveyEnabled: false,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
   });
   setGroupSchedule(nonMatching, {
     reminderWeekdays: [3],
@@ -139,6 +152,9 @@ test('a reminder only fires for chats whose own schedule actually matches the ti
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
+    ratingSurveyEnabled: false,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
   });
   const { bot, sentMessages } = fakeBot();
 
@@ -160,6 +176,9 @@ test('lockTime passing locks submissions for that chat and marks it fired', () =
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '23:59',
+    ratingSurveyEnabled: false,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
   });
   submitPlace(chatId, 30001, 'tester', 'https://www.instagram.com/somewhere');
   const { bot } = fakeBot();
@@ -181,6 +200,9 @@ test('drawTime passing with a submission picks a winner, records history, resets
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
+    ratingSurveyEnabled: false,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
   });
   submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
   const { bot, sentMessages } = fakeBot();
@@ -205,6 +227,9 @@ test('drawTime passing with no submissions announces "nobody submitted" instead 
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
+    ratingSurveyEnabled: false,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
   });
   const { bot, sentMessages } = fakeBot();
 
@@ -226,6 +251,9 @@ test('a draw does not fire twice for the same calendar day', async () => {
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
+    ratingSurveyEnabled: false,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
   });
   submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
   const { bot, sentMessages } = fakeBot();
@@ -238,6 +266,170 @@ test('a draw does not fire twice for the same calendar day', async () => {
   assert.equal(messagesFor(sentMessages, chatId).length, 1);
 });
 
+test('the rating survey fires on its own configured day/time and DMs each submitter privately', async () => {
+  const chatId = -24011;
+  const userId = 30005;
+  addGroupChat(chatId, 'Test Group');
+  setGroupSchedule(chatId, {
+    reminderWeekdays: [],
+    reminderTime: '10:00',
+    deadlineWeekday: 5,
+    lockTime: '18:00',
+    drawTime: '18:15',
+    ratingSurveyEnabled: true,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
+  });
+  submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
+  const { bot, sentMessages } = fakeBot();
+
+  runSchedulerTick(bot, { weekday: 5, time: '18:15', date: '2026-08-21' }); // draw happens first
+  await flush();
+  runSchedulerTick(bot, { weekday: 0, time: '15:00', date: '2026-08-23' }); // survey follows, own day/time
+  await flush();
+
+  const dm = messagesFor(sentMessages, userId); // sent to the submitter's private chat, not the group
+  assert.equal(dm.length, 1);
+  assert.match(dm[0].text, /somewhere/);
+  assert.equal(hasFiredToday(chatId, 'ratingSurvey', '2026-08-23'), true);
+});
+
+test('the rating survey does not fire when disabled', async () => {
+  const chatId = -24012;
+  const userId = 30006;
+  addGroupChat(chatId, 'Test Group');
+  setGroupSchedule(chatId, {
+    reminderWeekdays: [],
+    reminderTime: '10:00',
+    deadlineWeekday: 5,
+    lockTime: '18:00',
+    drawTime: '18:15',
+    ratingSurveyEnabled: false,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
+  });
+  submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
+  const { bot, sentMessages } = fakeBot();
+
+  runSchedulerTick(bot, { weekday: 5, time: '18:15', date: '2026-08-21' });
+  await flush();
+  runSchedulerTick(bot, { weekday: 0, time: '15:00', date: '2026-08-23' });
+  await flush();
+
+  assert.equal(messagesFor(sentMessages, userId).length, 0);
+  assert.equal(hasFiredToday(chatId, 'ratingSurvey', '2026-08-23'), false);
+});
+
+test('the rating survey marks fired but sends nothing when the latest draw had no winner', async () => {
+  const chatId = -24013;
+  addGroupChat(chatId, 'Test Group');
+  setGroupSchedule(chatId, {
+    reminderWeekdays: [],
+    reminderTime: '10:00',
+    deadlineWeekday: 5,
+    lockTime: '18:00',
+    drawTime: '18:15',
+    ratingSurveyEnabled: true,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
+  });
+  const { bot, sentMessages } = fakeBot();
+
+  runSchedulerTick(bot, { weekday: 5, time: '18:15', date: '2026-08-21' }); // nobody submitted
+  await flush();
+  runSchedulerTick(bot, { weekday: 0, time: '15:00', date: '2026-08-23' });
+  await flush();
+
+  assert.equal(hasFiredToday(chatId, 'ratingSurvey', '2026-08-23'), true);
+  assert.equal(sentMessages.length, 1); // only the group's own "nobody submitted" announcement
+});
+
+test('a paused chat still marks the rating survey fired but skips sending it', async () => {
+  const chatId = -24014;
+  const userId = 30007;
+  addGroupChat(chatId, 'Test Group');
+  setGroupSchedule(chatId, {
+    reminderWeekdays: [],
+    reminderTime: '10:00',
+    deadlineWeekday: 5,
+    lockTime: '18:00',
+    drawTime: '18:15',
+    ratingSurveyEnabled: true,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
+  });
+  submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
+  const { bot, sentMessages } = fakeBot();
+
+  runSchedulerTick(bot, { weekday: 5, time: '18:15', date: '2026-08-21' });
+  await flush();
+
+  pauseGroup(chatId);
+  runSchedulerTick(bot, { weekday: 0, time: '15:00', date: '2026-08-23' });
+  await flush();
+
+  assert.equal(hasFiredToday(chatId, 'ratingSurvey', '2026-08-23'), true);
+  assert.equal(messagesFor(sentMessages, userId).length, 0);
+});
+
+test('the rating survey does not fire twice for the same calendar day', async () => {
+  const chatId = -24015;
+  const userId = 30008;
+  addGroupChat(chatId, 'Test Group');
+  setGroupSchedule(chatId, {
+    reminderWeekdays: [],
+    reminderTime: '10:00',
+    deadlineWeekday: 5,
+    lockTime: '18:00',
+    drawTime: '18:15',
+    ratingSurveyEnabled: true,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
+  });
+  submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
+  const { bot, sentMessages } = fakeBot();
+
+  runSchedulerTick(bot, { weekday: 5, time: '18:15', date: '2026-08-21' });
+  await flush();
+  runSchedulerTick(bot, { weekday: 0, time: '15:00', date: '2026-08-23' });
+  await flush();
+  runSchedulerTick(bot, { weekday: 0, time: '15:05', date: '2026-08-23' });
+  await flush();
+
+  assert.equal(messagesFor(sentMessages, userId).length, 1);
+});
+
+test('the rating survey does not DM a submitter who was blocked after that week\'s draw', async () => {
+  const chatId = -24016;
+  const submitterUserId = 30009;
+  const blockedUserId = 30010;
+  addGroupChat(chatId, 'Test Group');
+  setGroupSchedule(chatId, {
+    reminderWeekdays: [],
+    reminderTime: '10:00',
+    deadlineWeekday: 5,
+    lockTime: '18:00',
+    drawTime: '18:15',
+    ratingSurveyEnabled: true,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
+  });
+  submitPlace(chatId, submitterUserId, 'tester', 'https://www.instagram.com/somewhere');
+  submitPlace(chatId, blockedUserId, 'tester2', 'https://www.instagram.com/elsewhere');
+  const { bot, sentMessages } = fakeBot();
+
+  runSchedulerTick(bot, { weekday: 5, time: '18:15', date: '2026-08-21' }); // both submitted to this draw
+  await flush();
+
+  blockUserFromGroup(chatId, blockedUserId, 'tester2', 999); // blocked only after the draw
+
+  runSchedulerTick(bot, { weekday: 0, time: '15:00', date: '2026-08-23' });
+  await flush();
+
+  assert.equal(messagesFor(sentMessages, submitterUserId).length, 1);
+  assert.equal(messagesFor(sentMessages, blockedUserId).length, 0);
+});
+
 test('a paused chat still marks reminder/lock/draw fired for today but skips the actual side effects', async () => {
   const chatId = -24010;
   const userId = 30004;
@@ -248,6 +440,9 @@ test('a paused chat still marks reminder/lock/draw fired for today but skips the
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
+    ratingSurveyEnabled: false,
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
   });
   submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
   pauseGroup(chatId);

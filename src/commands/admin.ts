@@ -1,7 +1,9 @@
 import { Markup, type Context } from 'telegraf';
 import { buildDrawAnnouncement } from '../announcements.js';
+import { placeLabel } from '../htmlFormat.js';
 import { handleAdminEntryCommand, isGroupAdmin, showGatedMenu } from './access.js';
 import { getKyivNow } from '../kyivTime.js';
+import { sendRatingSurvey } from '../scheduler.js';
 import {
   blockUserFromGroup,
   getAllSubmissions,
@@ -16,8 +18,10 @@ import {
   resumeGroup,
   unblockUserFromGroup,
 } from '../services/submissionService.js';
+import { getRatingSurveyContext } from '../services/ratingService.js';
 import { logAdminAction } from '../storage/auditLog.js';
 import { markFired } from '../storage/firedEvents.js';
+import { clearRatingSelection, getRatingSelection, setRatingSelection } from '../storage/ratingSelectionState.js';
 import { sendToChat } from '../telegramBroadcast.js';
 import { createPanel, safeAnswerCbQuery } from './panel.js';
 
@@ -53,6 +57,7 @@ function buildPanelKeyboard(chatId: number) {
   rows.push([Markup.button.callback('🔀 Провести жеребкування зараз', `admin:draw:${chatId}`)]);
   rows.push([Markup.button.callback('🧹 Скинути тиждень (без розіграшу)', `admin:clearweek:${chatId}`)]);
   rows.push([Markup.button.callback('🚫 Блокування учасників', `admin:blocklist:${chatId}`)]);
+  rows.push([Markup.button.callback('⭐ Надіслати опитування', `admin:rating:${chatId}`)]);
   return Markup.inlineKeyboard(rows);
 }
 
@@ -96,6 +101,47 @@ function buildBlocklistKeyboard(chatId: number) {
 
 async function renderBlocklistPanel(ctx: Context, userId: number, chatId: number): Promise<void> {
   await panel.update(ctx, userId, buildBlocklistText(chatId), buildBlocklistKeyboard(chatId));
+}
+
+// Not rendered as HTML (parse_mode is never set for this panel, unlike group announcements), so
+// placeLabel (plain-text) is used here, not placeLink.
+function buildRatingSendText(chatId: number): string {
+  const context = getRatingSurveyContext(chatId);
+  if (!context) {
+    return '⭐ Опитування про заклад\n\nЩе не було завершеного жеребкування з переможцем — нікого запитати.';
+  }
+  return (
+    `⭐ Опитування про заклад «${placeLabel(context.winnerPlace)}»\n\n` +
+    `Обери, кому надіслати (тап перемикає), або надішли всім одразу.`
+  );
+}
+
+// Kept a pure render given the current selection, so both opening the screen fresh (empty Set)
+// and re-rendering after a toggle (the mutated Set) go through the same builder.
+function buildRatingSendKeyboard(chatId: number, selected: Set<number>) {
+  const context = getRatingSurveyContext(chatId);
+  if (!context) {
+    return Markup.inlineKeyboard([[Markup.button.callback('‹ Назад', `admin:select:${chatId}`)]]);
+  }
+
+  // context.recipients already excludes anyone currently blocked (getRatingSurveyContext), so a
+  // since-blocked submitter never appears here as a selectable target.
+  const rows = context.recipients.map((s) => [
+    Markup.button.callback(
+      `${selected.has(s.userId) ? '✅' : '◻️'} ${displayName(s.username, s.userId)}`,
+      `admin:rating_toggle:${chatId}:${s.userId}`,
+    ),
+  ]);
+  rows.push([Markup.button.callback('📤 Надіслати всім', `admin:rating_all:${chatId}`)]);
+  if (selected.size > 0) {
+    rows.push([Markup.button.callback(`✅ Надіслати обраним (${selected.size})`, `admin:rating_send:${chatId}`)]);
+  }
+  rows.push([Markup.button.callback('‹ Назад', `admin:select:${chatId}`)]);
+  return Markup.inlineKeyboard(rows);
+}
+
+async function renderRatingSendPanel(ctx: Context, userId: number, chatId: number, selected: Set<number>): Promise<void> {
+  await panel.update(ctx, userId, buildRatingSendText(chatId), buildRatingSendKeyboard(chatId, selected));
 }
 
 async function renderAdminPanel(ctx: Context, userId: number, chatId: number): Promise<void> {
@@ -157,6 +203,18 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
   if (!admin) {
     await safeAnswerCbQuery(ctx, '🔒 Лише адміни групи можуть керувати циклом.', { show_alert: true });
     return;
+  }
+
+  // "✅ Надіслати обраним" is only ever rendered once selected.size > 0, so reaching this action
+  // with nothing (or stale-chat) selected means the tapped button is a leftover from an older,
+  // already-acted-on render of this screen — same "stale inline button" class as schedule.ts's
+  // days_done empty-selection guard, checked before the generic ack for the same reason.
+  if (action === 'rating_send') {
+    const selection = getRatingSelection(userId);
+    if (!selection || selection.chatId !== chatId || selection.selected.size === 0) {
+      await safeAnswerCbQuery(ctx, '🔄 Вибір застарів — обери когось ще раз.', { show_alert: true });
+      return;
+    }
   }
 
   await safeAnswerCbQuery(ctx);
@@ -240,6 +298,56 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
     unblockUserFromGroup(chatId, targetUserId);
     logAdminAction({ chatId, actorUserId: userId, actorName, action: 'unblock', detail: `target:${targetUserId}` });
     await renderBlocklistPanel(ctx, userId, chatId);
+    return;
+  }
+
+  if (action === 'rating') {
+    const selected = new Set<number>();
+    setRatingSelection(userId, { chatId, selected });
+    await renderRatingSendPanel(ctx, userId, chatId, selected);
+    return;
+  }
+
+  if (action === 'rating_toggle') {
+    if (targetUserId === undefined) return;
+    const current = getRatingSelection(userId);
+    const selected = current && current.chatId === chatId ? current.selected : new Set<number>();
+    if (selected.has(targetUserId)) {
+      selected.delete(targetUserId);
+    } else {
+      selected.add(targetUserId);
+    }
+    setRatingSelection(userId, { chatId, selected });
+    await renderRatingSendPanel(ctx, userId, chatId, selected);
+    return;
+  }
+
+  if (action === 'rating_all') {
+    if (getRatingSurveyContext(chatId)) {
+      await sendRatingSurvey(ctx.telegram, chatId);
+      logAdminAction({ chatId, actorUserId: userId, actorName, action: 'send_rating_survey', detail: 'all' });
+    }
+    clearRatingSelection(userId);
+    await renderAdminPanel(ctx, userId, chatId);
+    return;
+  }
+
+  if (action === 'rating_send') {
+    // Non-empty selection for this chatId already confirmed above, before the generic ack.
+    const selection = getRatingSelection(userId)!;
+    if (getRatingSurveyContext(chatId)) {
+      const targets = Array.from(selection.selected);
+      await sendRatingSurvey(ctx.telegram, chatId, targets);
+      logAdminAction({
+        chatId,
+        actorUserId: userId,
+        actorName,
+        action: 'send_rating_survey',
+        detail: `targets:${targets.join(',')}`,
+      });
+    }
+    clearRatingSelection(userId);
+    await renderAdminPanel(ctx, userId, chatId);
     return;
   }
 }

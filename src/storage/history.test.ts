@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { getHistoricalSubmitters, recordDraw } from './history.js';
+import { getHistoricalSubmitters, getLatestDraw, getSubmissionsForDraw, recordDraw } from './history.js';
 
 test('recordDraw does not throw when there is a winner', () => {
   assert.doesNotThrow(() =>
@@ -77,4 +77,56 @@ test('getHistoricalSubmitters is isolated per chat', () => {
   });
 
   assert.deepEqual(getHistoricalSubmitters(-5006), []);
+});
+
+test('getLatestDraw returns undefined for a chat with no draws yet', () => {
+  assert.equal(getLatestDraw(-5007), undefined);
+});
+
+test('getLatestDraw returns the most recent draw for that chat', () => {
+  recordDraw({
+    chatId: -5008,
+    drawnAt: 1_700_000_000_000,
+    winner: { userId: 1, username: 'artem', place: 'Дежерьома' },
+    submissions: [{ userId: 1, username: 'artem', place: 'Дежерьома' }],
+  });
+  recordDraw({
+    chatId: -5008,
+    drawnAt: 1_700_000_100_000,
+    winner: { userId: 2, username: 'olya', place: 'Пузата хата' },
+    submissions: [{ userId: 2, username: 'olya', place: 'Пузата хата' }],
+  });
+
+  const latest = getLatestDraw(-5008);
+  assert.equal(latest?.drawnAt, 1_700_000_100_000);
+  assert.equal(latest?.winnerPlace, 'Пузата хата');
+});
+
+test('getLatestDraw returns a null winnerPlace when nobody submitted that week', () => {
+  recordDraw({ chatId: -5009, drawnAt: 1_700_000_000_000, winner: undefined, submissions: [] });
+
+  assert.equal(getLatestDraw(-5009)?.winnerPlace, null);
+});
+
+test('getSubmissionsForDraw returns every submitter for that specific draw, winner included', () => {
+  recordDraw({
+    chatId: -5010,
+    drawnAt: 1_700_000_000_000,
+    winner: { userId: 1, username: 'artem', place: 'Дежерьома' },
+    submissions: [
+      { userId: 1, username: 'artem', place: 'Дежерьома' },
+      { userId: 2, username: 'olya', place: 'Пузата хата' },
+    ],
+  });
+  const drawId = getLatestDraw(-5010)!.id;
+
+  // node:sqlite rows are null-prototype — spread before deepEqual (deepEqual is deepStrictEqual,
+  // which also compares prototypes).
+  const submitters = getSubmissionsForDraw(drawId)
+    .map((row) => ({ ...row }))
+    .sort((a, b) => a.userId - b.userId);
+  assert.deepEqual(submitters, [
+    { userId: 1, username: 'artem', place: 'Дежерьома' },
+    { userId: 2, username: 'olya', place: 'Пузата хата' },
+  ]);
 });

@@ -28,3 +28,13 @@ test('overrides are isolated per chat', () => {
   setGroupSchedule(-7004, { ...DEFAULT_SCHEDULE, drawTime: '20:00' });
   assert.deepEqual(getGroupSchedule(-7005), DEFAULT_SCHEDULE);
 });
+
+// A chat that customized its schedule before ratingSurvey* fields existed has a persisted object
+// missing those keys — getGroupSchedule must backfill them from DEFAULT_SCHEDULE rather than
+// returning the stored object as-is (which would leave ratingSurveyEnabled undefined).
+test('getGroupSchedule backfills fields missing from a previously persisted override', () => {
+  const legacyOverride = { reminderTime: '09:30' } as unknown as Parameters<typeof setGroupSchedule>[1];
+  setGroupSchedule(-7006, legacyOverride);
+
+  assert.deepEqual(getGroupSchedule(-7006), { ...DEFAULT_SCHEDULE, reminderTime: '09:30' });
+});

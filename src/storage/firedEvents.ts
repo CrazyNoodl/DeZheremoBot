@@ -1,6 +1,6 @@
 import { db } from './db.js';
 
-export type ScheduledAction = 'reminder' | 'lock' | 'draw';
+export type ScheduledAction = 'reminder' | 'lock' | 'draw' | 'ratingSurvey';
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS fired_events (

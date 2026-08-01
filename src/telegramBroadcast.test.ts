@@ -11,7 +11,7 @@ import { TelegramError, type Telegram } from 'telegraf';
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dzb-broadcast-'));
 process.env.DEZHEREMO_DATA_DIR = dataDir;
 
-const { broadcast, sendToChat } = await import('./telegramBroadcast.js');
+const { broadcast, sendDirectMessage, sendToChat } = await import('./telegramBroadcast.js');
 const { addGroupChat, listGroupChats } = await import('./storage/groupChats.js');
 
 function fakeTelegram(sendMessage: Telegram['sendMessage']): { telegram: Telegram; deletes: Array<{ chatId: number; messageId: number }> } {
@@ -161,6 +161,51 @@ test('broadcast continues to the next chat after one chat fails to send', async 
 
   assert.equal(calls.includes(-40011), true);
   assert.equal(calls.includes(-40012), true);
+});
+
+test('sendDirectMessage sends the message with the given text and extra', async () => {
+  const calls: Array<{ chatId: number; text: string; extra?: object }> = [];
+  const { telegram } = fakeTelegram(async (chatId: number, text: string, extra?: object) => {
+    calls.push({ chatId, text, extra });
+    return { message_id: 1 } as any;
+  });
+
+  await sendDirectMessage(telegram, 555, 'rate this place', { parse_mode: 'HTML' });
+
+  assert.deepEqual(calls, [{ chatId: 555, text: 'rate this place', extra: { parse_mode: 'HTML' } }]);
+});
+
+// A user id blocking the bot in DM has nothing to do with a group's own registry — unlike
+// sendToChat's group-broadcast path, a 403 here must never call removeGroupChat, since a user id
+// could otherwise (in theory) collide with a registered group chat id and wrongly deregister it.
+test('sendDirectMessage on a 403 does not touch the group chats registry', async () => {
+  addGroupChat(-40015, 'Untouched Group');
+  const { telegram } = fakeTelegram(async () => {
+    throw new TelegramError({ error_code: 403, description: 'Forbidden: bot was blocked by the user' });
+  });
+
+  await sendDirectMessage(telegram, 556, 'rate this place');
+
+  assert.equal(listGroupChats().includes(-40015), true);
+});
+
+test('sendDirectMessage logs a 403 instead of swallowing it silently', async (t) => {
+  const warnSpy = t.mock.method(console, 'warn');
+  const { telegram } = fakeTelegram(async () => {
+    throw new TelegramError({ error_code: 403, description: 'Forbidden: bot was blocked by the user' });
+  });
+
+  await sendDirectMessage(telegram, 557, 'rate this place');
+
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test('sendDirectMessage never rejects even when the send itself fails', async () => {
+  const { telegram } = fakeTelegram(async () => {
+    throw new Error('boom');
+  });
+
+  await assert.doesNotReject(sendDirectMessage(telegram, 558, 'rate this place'));
 });
 
 test('broadcast self-heals a 403 mid-loop without aborting the remaining chats', async () => {

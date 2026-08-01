@@ -1,5 +1,5 @@
 import * as Sentry from '@sentry/node';
-import { Markup, type Context } from 'telegraf';
+import { Markup, TelegramError, type Context } from 'telegraf';
 import { escapeHtml, placeLink } from '../htmlFormat.js';
 import { getSchedule } from '../services/scheduleService.js';
 import { getUserSubmission } from '../services/submissionService.js';
@@ -102,6 +102,12 @@ export async function updateMenuMessage(
       setMenuMessage(userId, ref.chatId, ref.messageId, groupChatId); // this card now represents groupChatId's cycle
       return;
     } catch (err) {
+      // Telegram rejects an edit whose text+keyboard exactly match the current message (e.g. a
+      // rapid double-tap of the same button) — that's a no-op, not a failure, so don't fall
+      // through to sending a duplicate. Same fix as commands/panel.ts's shared `update`.
+      if (err instanceof TelegramError && err.description?.includes('message is not modified')) {
+        return;
+      }
       // too old to edit (past Telegram's window) or deleted — fall through to a fresh message.
       // Logged at warn rather than error: expected to happen occasionally, but a spike would
       // otherwise be invisible.

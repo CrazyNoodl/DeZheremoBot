@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import type { Context } from 'telegraf';
+import { TelegramError, type Context } from 'telegraf';
 
 // commands/menuMessage.ts pulls in storage/groupChats.ts (via getGroupChatTitle) and
 // storage/groupSchedules.ts (via services/scheduleService.ts's getSchedule), both of which load
@@ -34,7 +34,7 @@ interface DeleteCall {
   messageId: number;
 }
 
-function fakeCtx(privateChatId: number | undefined, opts: { editSucceeds?: boolean } = {}) {
+function fakeCtx(privateChatId: number | undefined, opts: { editSucceeds?: boolean; editError?: Error } = {}) {
   const replies: SentMessage[] = [];
   const sentMessageIds: number[] = [];
   const edits: EditCall[] = [];
@@ -51,7 +51,7 @@ function fakeCtx(privateChatId: number | undefined, opts: { editSucceeds?: boole
         extra?: Record<string, unknown>,
       ) => {
         edits.push({ chatId, messageId, text, extra });
-        if (!opts.editSucceeds) throw new Error('no message tracked to edit in this test');
+        if (!opts.editSucceeds) throw opts.editError ?? new Error('no message tracked to edit in this test');
         return { message_id: messageId };
       },
       deleteMessage: async (chatId: number, messageId: number) => {
@@ -229,6 +229,24 @@ test('updateMenuMessage edits the previously tracked message in place on a later
   assert.equal(edits[0].messageId, sentMessageIds[0]);
   assert.equal(edits[0].extra?.parse_mode, 'HTML');
   assert.match(edits[0].text, /^📍 Друга група\n\nоновлений текст/);
+});
+
+test('updateMenuMessage is a silent no-op (no fallback send) when editMessageText throws a "message is not modified" TelegramError', async () => {
+  const groupChatId = -23015;
+  const userId = 23015;
+  const privateChatId = 23015;
+  const { ctx, replies } = fakeCtx(privateChatId, {
+    editSucceeds: false,
+    editError: new TelegramError({ error_code: 400, description: 'Bad Request: message is not modified' }),
+  });
+
+  await sendMenuMessage(ctx, groupChatId, userId, 'текст');
+  assert.equal(replies.length, 1);
+
+  // e.g. a rapid double-tap of the same button — the second edit is a genuine no-op, not a failure
+  await updateMenuMessage(ctx, groupChatId, userId, 'текст');
+
+  assert.equal(replies.length, 1); // no fallback duplicate message sent
 });
 
 // --- 48h TTL ---

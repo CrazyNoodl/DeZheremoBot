@@ -3,7 +3,10 @@ import * as Sentry from '@sentry/node';
 import type { Telegraf, Telegram } from 'telegraf';
 import { buildDrawAnnouncement, buildFinalReminderExtra, pickRandomEmoji } from './announcements.js';
 import { buildGroupMenu } from './commands/keyboard.js';
+import { buildRatingKeyboard } from './commands/rating.js';
+import { placeLink } from './htmlFormat.js';
 import { getKyivNow } from './kyivTime.js';
+import { getRatingSurveyContext } from './services/ratingService.js';
 import { getNonSubmittersInfo } from './services/reminderService.js';
 import { getFinalReminderWeekday } from './services/scheduleService.js';
 import {
@@ -16,7 +19,7 @@ import {
 import { hasFiredToday, markFired } from './storage/firedEvents.js';
 import { listGroupChats } from './storage/groupChats.js';
 import { getGroupSchedule, type GroupScheduleConfig } from './storage/groupSchedules.js';
-import { sendToChat } from './telegramBroadcast.js';
+import { sendDirectMessage, sendToChat } from './telegramBroadcast.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -64,6 +67,27 @@ async function sendReminder(bot: Telegraf, chatId: number, schedule: GroupSchedu
   }
 
   await sendTaggedReminder(bot.telegram, bot.botInfo!.username, chatId);
+}
+
+// Fires on its own configured weekday/time, after that week's live submissions table has already
+// been cleared by resetWeek — reads the durable draw record instead, via getRatingSurveyContext
+// (which also excludes anyone blocked since submitting — see services/ratingService.ts). Only
+// status==='submitted' users ever land in submissions_history (recordDraw filters decliners out
+// before persisting), so this already asks exactly the "who submitted, not who declined" roster.
+// Exported so commands/admin.ts's manual "send rating survey now" button can call the exact same
+// code path — with an optional target-user filter, since forcing it for just one person shouldn't
+// also re-notify everyone else who already submitted that week (see "Post-draw rating survey").
+export async function sendRatingSurvey(telegram: Telegram, chatId: number, onlyUserIds?: number[]): Promise<void> {
+  const context = getRatingSurveyContext(chatId);
+  if (!context) return; // no draw yet, or nobody submitted that week
+
+  const text = `Як тобі ${placeLink(context.winnerPlace)}? Постав оцінку від 1 до 5 ⭐`;
+  const keyboard = buildRatingKeyboard(context.drawId);
+
+  const targets = onlyUserIds ? context.recipients.filter((s) => onlyUserIds.includes(s.userId)) : context.recipients;
+  for (const submitter of targets) {
+    await sendDirectMessage(telegram, submitter.userId, text, { ...keyboard, parse_mode: 'HTML' });
+  }
 }
 
 // The per-minute tick's actual logic, factored out so it can be called directly with a controlled
@@ -117,6 +141,16 @@ export function runSchedulerTick(bot: Telegraf, now: { weekday: number; time: st
         resetWeek(chatId);
         sendToChat(bot.telegram, chatId, buildDrawAnnouncement(winner), { parse_mode: 'HTML' });
       }
+    }
+
+    if (
+      schedule.ratingSurveyEnabled &&
+      weekday === schedule.ratingSurveyWeekday &&
+      time >= schedule.ratingSurveyTime &&
+      !hasFiredToday(chatId, 'ratingSurvey', date)
+    ) {
+      markFired(chatId, 'ratingSurvey', date);
+      if (!paused) sendRatingSurvey(bot.telegram, chatId);
     }
   }
 }

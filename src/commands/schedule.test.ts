@@ -209,3 +209,147 @@ test('handleScheduleTextStep does not log an audit entry for an invalid time (no
   assert.equal(handled, true);
   assert.deepEqual(listAdminActions(chatId), []);
 });
+
+test('handleScheduleAction refuses "rating_toggle" for a demoted admin and leaves the flag untouched', async () => {
+  const userId = 20030;
+  const chatId = -20030;
+
+  const { ctx, rawCtx, alerts } = fakeCtx('member', userId);
+  withCallbackData(rawCtx, `sched:rating_toggle:${chatId}`);
+  await handleScheduleAction(ctx);
+
+  assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
+  assert.equal(getSchedule(chatId).ratingSurveyEnabled, DEFAULT_SCHEDULE.ratingSurveyEnabled);
+  assert.deepEqual(listAdminActions(chatId), []);
+});
+
+test('a current admin tapping "rating_toggle" flips the flag and logs it', async () => {
+  const userId = 20031;
+  const chatId = -20031;
+  assert.equal(getSchedule(chatId).ratingSurveyEnabled, true); // starts at the default (enabled)
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `sched:rating_toggle:${chatId}`);
+  await handleScheduleAction(ctx);
+
+  assert.equal(getSchedule(chatId).ratingSurveyEnabled, false);
+  assert.equal(listAdminActions(chatId)[0]?.action, 'rating_toggle');
+  assert.equal(listAdminActions(chatId)[0]?.detail, 'off');
+  assert.equal(replies.some((r) => /з оцінкою закладу/.test(r)), true); // the rating sub-screen, not the main summary
+});
+
+test('handleScheduleAction refuses "rating_edit" for a demoted admin and starts no wizard', async () => {
+  const userId = 20032;
+  const chatId = -20032;
+
+  const { ctx, rawCtx, alerts } = fakeCtx('member', userId);
+  withCallbackData(rawCtx, `sched:rating_edit:${chatId}`);
+  await handleScheduleAction(ctx);
+
+  assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
+  assert.equal(getScheduleEditState(userId), undefined);
+});
+
+test('a current admin tapping "rating_edit" then a weekday starts the rating time-entry step', async () => {
+  const userId = 20033;
+  const chatId = -20033;
+
+  const { ctx, rawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `sched:rating_edit:${chatId}`);
+  await handleScheduleAction(ctx);
+
+  let state = getScheduleEditState(userId);
+  assert.deepEqual(state, { flow: 'rating', step: 'weekday', chatId });
+
+  withCallbackData(rawCtx, 'sched:day:2');
+  await handleScheduleAction(ctx);
+
+  state = getScheduleEditState(userId);
+  assert.deepEqual(state, { flow: 'rating', step: 'time', chatId, weekday: 2 });
+});
+
+test('handleScheduleTextStep applies a rating day/time change and lands back on the rating screen', async () => {
+  const userId = 20034;
+  const chatId = -20034;
+  setScheduleEditState(userId, { flow: 'rating', step: 'time', chatId, weekday: 4 });
+
+  const { ctx, replies } = fakeCtx('administrator', userId);
+  const handled = await handleScheduleTextStep(ctx, userId, '16:30');
+
+  assert.equal(handled, true);
+  const schedule = getSchedule(chatId);
+  assert.equal(schedule.ratingSurveyWeekday, 4);
+  assert.equal(schedule.ratingSurveyTime, '16:30');
+  assert.equal(getScheduleEditState(userId), undefined); // wizard state cleared, not left dangling
+  assert.equal(listAdminActions(chatId)[0]?.action, 'edit_rating');
+  assert.equal(listAdminActions(chatId)[0]?.detail, 'weekday:4 time:16:30');
+  assert.equal(replies.some((r) => /з оцінкою закладу/.test(r)), true); // landed on the rating screen, not the main summary
+});
+
+test('handleScheduleTextStep rejects an invalid rating time without mutating the schedule', async () => {
+  const userId = 20035;
+  const chatId = -20035;
+  setScheduleEditState(userId, { flow: 'rating', step: 'time', chatId, weekday: 1 });
+
+  const { ctx } = fakeCtx('administrator', userId);
+  const handled = await handleScheduleTextStep(ctx, userId, 'nope');
+
+  assert.equal(handled, true);
+  assert.deepEqual(listAdminActions(chatId), []);
+  assert.equal(getSchedule(chatId).ratingSurveyWeekday, DEFAULT_SCHEDULE.ratingSurveyWeekday);
+});
+
+test('"back" from the rating weekday step lands on the rating screen, not the main summary', async () => {
+  const userId = 20037;
+  const chatId = -20037;
+  setScheduleEditState(userId, { flow: 'rating', step: 'weekday', chatId });
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, 'sched:back');
+  await handleScheduleAction(ctx);
+
+  assert.equal(getScheduleEditState(userId), undefined);
+  assert.equal(replies.some((r) => /з оцінкою закладу/.test(r)), true);
+  assert.equal(replies.some((r) => /Розклад цієї групи/.test(r)), false);
+});
+
+test('"back" from the rating time step lands on the rating screen, not the main summary', async () => {
+  const userId = 20038;
+  const chatId = -20038;
+  setScheduleEditState(userId, { flow: 'rating', step: 'time', chatId, weekday: 3 });
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, 'sched:back');
+  await handleScheduleAction(ctx);
+
+  assert.equal(getScheduleEditState(userId), undefined);
+  assert.equal(replies.some((r) => /з оцінкою закладу/.test(r)), true);
+  assert.equal(replies.some((r) => /Розклад цієї групи/.test(r)), false);
+});
+
+test('"back" from the deadline wizard still lands on the main summary (unlike rating)', async () => {
+  const userId = 20039;
+  const chatId = -20039;
+  setScheduleEditState(userId, { flow: 'deadline', step: 'weekday', chatId });
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, 'sched:back');
+  await handleScheduleAction(ctx);
+
+  assert.equal(getScheduleEditState(userId), undefined);
+  assert.equal(replies.some((r) => /Розклад цієї групи/.test(r)), true);
+});
+
+test('handleScheduleTextStep refuses to apply a rating time change once the user is no longer admin', async () => {
+  const userId = 20036;
+  const chatId = -20036;
+  setScheduleEditState(userId, { flow: 'rating', step: 'time', chatId, weekday: 1 });
+
+  const { ctx, replies } = fakeCtx('member', userId);
+  const handled = await handleScheduleTextStep(ctx, userId, '16:00');
+
+  assert.equal(handled, true);
+  assert.equal(replies.some((r) => /більше не адмін/.test(r)), true);
+  assert.deepEqual(listAdminActions(chatId), []);
+  assert.equal(getScheduleEditState(userId), undefined);
+});

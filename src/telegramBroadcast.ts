@@ -48,3 +48,18 @@ export async function sendToChat(
 ): Promise<void> {
   await sendAndTrack(telegram, chatId, text, extra, deleteAfterMs);
 }
+
+// A DM to a specific user (e.g. the rating survey) is not a group broadcast: a 403 here means that
+// one user blocked the bot in their private chat, not that the bot got kicked from a group, so it
+// must not call removeGroupChat(userId) (harmless today only because a user id never collides with
+// a registered group chat id — still the wrong storage call to make). Unlike sendAndTrack's group
+// path, this logs every failure, 403 included, since a silently-undelivered survey DM would
+// otherwise vanish with no trace of who never got asked.
+export async function sendDirectMessage(telegram: Telegram, userId: number, text: string, extra?: object): Promise<void> {
+  try {
+    await telegram.sendMessage(userId, text, extra);
+  } catch (err) {
+    console.warn(`[telegramBroadcast] failed to DM user ${userId} (blocked the bot?):`, err);
+    Sentry.captureException(err);
+  }
+}
