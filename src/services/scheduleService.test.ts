@@ -9,10 +9,10 @@ import { test } from 'node:test';
 process.env.DEZHEREMO_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'dzb-scheduleservice-'));
 const {
   getFinalReminderWeekday,
+  getFirstReminderWeekday,
   getSchedule,
   isValidTime,
   resetSchedule,
-  setRatingSurveyEnabled,
   updateDeadlineSchedule,
   updateRatingSurveySchedule,
   updateReminderSchedule,
@@ -108,6 +108,21 @@ test('getFinalReminderWeekday returns the only reminder when just one is configu
   assert.equal(getFinalReminderWeekday({ ...DEFAULT_SCHEDULE, reminderWeekdays: [2], deadlineWeekday: 5 }), 2);
 });
 
+test('getFirstReminderWeekday picks the reminder farthest before the deadline', () => {
+  // Mon(1)/Wed(3)/Fri(5) reminders, Friday(5) deadline — Mon is farthest (4 days before).
+  assert.equal(getFirstReminderWeekday({ ...DEFAULT_SCHEDULE, reminderWeekdays: [1, 3, 5], deadlineWeekday: 5 }), 1);
+});
+
+test('getFirstReminderWeekday wraps across the week boundary', () => {
+  // Sat(6)/Sun(0) reminders, Mon(1) deadline — Sun is farthest (going Sun->Sat->Mon is wrong; Sun is
+  // 1 day before Monday, Sat is 2 days before — Sat is farthest.
+  assert.equal(getFirstReminderWeekday({ ...DEFAULT_SCHEDULE, reminderWeekdays: [6, 0], deadlineWeekday: 1 }), 6);
+});
+
+test('getFirstReminderWeekday returns the only reminder when just one is configured', () => {
+  assert.equal(getFirstReminderWeekday({ ...DEFAULT_SCHEDULE, reminderWeekdays: [2], deadlineWeekday: 5 }), 2);
+});
+
 test('updateRatingSurveySchedule rejects an invalid time and leaves the schedule untouched', () => {
   const result = updateRatingSurveySchedule(-8009, 0, 'nope');
 
@@ -120,19 +135,4 @@ test('updateRatingSurveySchedule applies a valid change', () => {
 
   assert.deepEqual(result, { ok: true });
   assert.deepEqual(getSchedule(-8010), { ...DEFAULT_SCHEDULE, ratingSurveyWeekday: 3, ratingSurveyTime: '16:30' });
-});
-
-test('setRatingSurveyEnabled toggles the flag without touching weekday/time', () => {
-  updateRatingSurveySchedule(-8011, 2, '12:00');
-
-  setRatingSurveyEnabled(-8011, false);
-  assert.deepEqual(getSchedule(-8011), {
-    ...DEFAULT_SCHEDULE,
-    ratingSurveyWeekday: 2,
-    ratingSurveyTime: '12:00',
-    ratingSurveyEnabled: false,
-  });
-
-  setRatingSurveyEnabled(-8011, true);
-  assert.equal(getSchedule(-8011).ratingSurveyEnabled, true);
 });

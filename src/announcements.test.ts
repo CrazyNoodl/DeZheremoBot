@@ -11,9 +11,17 @@ function withMockedNow(t: any, isoUtc: string, run: () => void): void {
 
 const PLACE_LINK = 'https://www.instagram.com/dezheroma';
 
+// Mirrors announcements.ts's own THANKS_LINE_POOL — one of these must appear verbatim, since the
+// credit line is now randomized rather than a single fixed string.
+const THANKS_LINE_TEXTS = [
+  '(дякуємо <b>artem</b> за ідею)',
+  '(<b>artem</b> сьогодні у ударі)',
+  '(смачного вибору, <b>artem</b>!)',
+];
+
 test('buildDrawAnnouncement mentions the place and submitter for a fresh win', () => {
   const text = buildDrawAnnouncement({ userId: 1, username: 'artem', place: PLACE_LINK, status: 'submitted' } as any);
-  assert.match(text, /дякуємо <b>artem<\/b> за ідею/);
+  assert.ok(THANKS_LINE_TEXTS.some((line) => text.includes(line)));
   assert.doesNotMatch(text, /знову/);
 });
 
@@ -23,7 +31,7 @@ test('buildDrawAnnouncement calls out a back-to-back repeat winner distinctly', 
     true,
   );
   assert.match(text, /знову/);
-  assert.match(text, /дякуємо <b>artem<\/b> за ідею/);
+  assert.ok(THANKS_LINE_TEXTS.some((line) => text.includes(line)));
 });
 
 test('buildDrawAnnouncement reports nobody submitted when there is no winner', () => {
@@ -36,9 +44,13 @@ test('buildFinalReminderExtra reports "all done" when nobody is left to tag', ()
   assert.match(text, /Усі вже встигли/);
 });
 
+// Mirrors announcements.ts's own NON_SUBMITTER_LEAD_POOL — the lead-in is now randomized, so tests
+// below assert on the mentions/suffix suffix rather than the exact full string.
+const NON_SUBMITTER_LEAD_TEXTS = ['⏰ Ще не встигли:', '⏰ Хвилинку! Ще чекаємо на:', '👋 Агов, ще не відповіли:'];
+
 test('buildFinalReminderExtra tags known non-submitters by user id', () => {
   const text = buildFinalReminderExtra([{ userId: 42, username: 'artem' }], 0);
-  assert.equal(text, '⏰ Ще не встигли: <a href="tg://user?id=42">artem</a>');
+  assert.ok(NON_SUBMITTER_LEAD_TEXTS.some((lead) => text === `${lead} <a href="tg://user?id=42">artem</a>`));
 });
 
 test('buildFinalReminderExtra joins multiple known non-submitters', () => {
@@ -49,15 +61,20 @@ test('buildFinalReminderExtra joins multiple known non-submitters', () => {
     ],
     0,
   );
-  assert.equal(
-    text,
-    '⏰ Ще не встигли: <a href="tg://user?id=1">artem</a>, <a href="tg://user?id=2">olya</a>',
+  assert.ok(
+    NON_SUBMITTER_LEAD_TEXTS.some(
+      (lead) => text === `${lead} <a href="tg://user?id=1">artem</a>, <a href="tg://user?id=2">olya</a>`,
+    ),
   );
 });
 
 test('buildFinalReminderExtra appends unknown members after the tagged list, singular', () => {
   const text = buildFinalReminderExtra([{ userId: 1, username: 'artem' }], 1);
-  assert.equal(text, '⏰ Ще не встигли: <a href="tg://user?id=1">artem</a> і ще 1 людина, кого я не знаю');
+  assert.ok(
+    NON_SUBMITTER_LEAD_TEXTS.some(
+      (lead) => text === `${lead} <a href="tg://user?id=1">artem</a> і ще 1 людина, кого я не знаю`,
+    ),
+  );
 });
 
 test('buildFinalReminderExtra reports only a count when there are no known non-submitters', () => {
@@ -68,7 +85,7 @@ test('buildFinalReminderExtra reports only a count when there are no known non-s
 
 test('buildFinalReminderExtra escapes HTML-unsafe characters in a username', () => {
   const text = buildFinalReminderExtra([{ userId: 1, username: '<script>' }], 0);
-  assert.equal(text, '⏰ Ще не встигли: <a href="tg://user?id=1">&lt;script&gt;</a>');
+  assert.ok(NON_SUBMITTER_LEAD_TEXTS.some((lead) => text === `${lead} <a href="tg://user?id=1">&lt;script&gt;</a>`));
 });
 
 test('buildFinalReminderExtra pluralizes the Ukrainian word for "people" correctly', () => {

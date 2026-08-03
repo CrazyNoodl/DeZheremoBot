@@ -25,6 +25,33 @@ export function addOrUpdateRating(drawId: number, userId: number, stars: number)
   upsertRatingStmt.run(drawId, userId, stars, Date.now());
 }
 
+export interface RaterCount {
+  userId: number;
+  username: string;
+  ratings: number;
+}
+
+// place_ratings has no username column of its own — ratings only ever go to a draw's submitters
+// (see ratingService.ts's getRatingSurveyContext), so joining back to that same draw's
+// submissions_history row for the same (draw_id, user_id) always finds one. Counts only actual
+// star ratings (stars IS NOT NULL), not "🙅 Мене не було" taps — used by /admin's
+// "📈 Активність" statistics tab.
+const topRatersStmt = db.prepare(`
+  SELECT pr.user_id AS userId, sh.username, COUNT(*) AS ratings, MAX(sh.id) AS lastId
+  FROM place_ratings pr
+  JOIN weekly_draws wd ON wd.id = pr.draw_id
+  JOIN submissions_history sh ON sh.draw_id = pr.draw_id AND sh.user_id = pr.user_id
+  WHERE wd.chat_id = ? AND pr.stars IS NOT NULL
+  GROUP BY pr.user_id
+  ORDER BY ratings DESC
+`);
+
+export function getTopRaters(chatId: number): RaterCount[] {
+  return (topRatersStmt.all(chatId) as unknown as (RaterCount & { lastId: number })[]).map(
+    ({ userId, username, ratings }) => ({ userId, username, ratings }),
+  );
+}
+
 // A submitter can drop out between proposing the place and the group actually going — asking them
 // to rate a visit that never happened for them doesn't make sense, so "🙅 Мене не було" records a
 // NULL stars row instead of forcing a 1-5 answer. Shares the same upsert as a real rating (same

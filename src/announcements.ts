@@ -59,6 +59,21 @@ export function pickRandomEmoji(pool: readonly string[]): string {
   return effectivePool[Math.floor(Math.random() * effectivePool.length)];
 }
 
+// Same idea as pickRandomEmoji, generalized to wording — no seasonal override, since that only
+// makes sense for a single emoji character, not a whole phrase.
+export function pickRandom<T>(pool: readonly T[]): T {
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// Varies the parenthetical credit line under the winner announcement, so that part of the message
+// doesn't read identically every week — the headline itself ("ДеЖеремо цього тижня: ...") stays
+// fixed as the one consistent brand phrase.
+const THANKS_LINE_POOL: readonly ((user: string) => string)[] = [
+  (user) => `(дякуємо <b>${user}</b> за ідею)`,
+  (user) => `(<b>${user}</b> сьогодні у ударі)`,
+  (user) => `(смачного вибору, <b>${user}</b>!)`,
+];
+
 // isRepeatWinner (services/submissionService.ts) must be computed before recordDraw persists the
 // new draw, then passed straight through here — see that function's own comment for why.
 export function buildDrawAnnouncement(winner: Submission | undefined, isRepeatWinner = false): string {
@@ -66,17 +81,16 @@ export function buildDrawAnnouncement(winner: Submission | undefined, isRepeatWi
     return `${pickRandomEmoji(NOBODY_SUBMITTED_EMOJI)} Цього тижня всі мовчали... наступного разу точно хтось запропонує щось смачне!`;
   }
 
+  const thanksLine = pickRandom(THANKS_LINE_POOL)(escapeHtml(winner.username));
+
   if (isRepeatWinner) {
     return (
       `${pickRandomEmoji(REPEAT_WINNER_EMOJI)} ДеЖеремо цього тижня: ${placeLink(winner.place)} — знову?! ` +
-      `Два тижні поспіль, доля явно щось знає 👀\n(дякуємо <b>${escapeHtml(winner.username)}</b> за ідею)`
+      `Два тижні поспіль, доля явно щось знає 👀\n${thanksLine}`
     );
   }
 
-  return (
-    `${pickRandomEmoji(WINNER_EMOJI)} ДеЖеремо цього тижня: ${placeLink(winner.place)}!\n` +
-    `(дякуємо <b>${escapeHtml(winner.username)}</b> за ідею)`
-  );
+  return `${pickRandomEmoji(WINNER_EMOJI)} ДеЖеремо цього тижня: ${placeLink(winner.place)}!\n${thanksLine}`;
 }
 
 // Ukrainian noun agreement for a count of people: 1 → людина, 2-4 → людини, 5+ (and the
@@ -93,6 +107,10 @@ function peopleWord(count: number): string {
 function mentionUser(user: HistoricalSubmitter): string {
   return `<a href="tg://user?id=${user.userId}">${escapeHtml(user.username)}</a>`;
 }
+
+// Varies the lead-in for the tagged non-submitter list, so the one message that names people by
+// name every week doesn't always open with the exact same words.
+const NON_SUBMITTER_LEAD_POOL = ['⏰ Ще не встигли:', '⏰ Хвилинку! Ще чекаємо на:', '👋 Агов, ще не відповіли:'] as const;
 
 // Appended to the reminder that lands closest to the deadline (see scheduleService's
 // getFinalReminderWeekday) — the one moment in the week where nudging stragglers by name actually
@@ -114,5 +132,5 @@ export function buildFinalReminderExtra(nonSubmitters: HistoricalSubmitter[], un
 
   const mentions = nonSubmitters.map(mentionUser).join(', ');
   const unknownSuffix = unknownCount > 0 ? ` і ще ${unknownCount} ${peopleWord(unknownCount)}, кого я не знаю` : '';
-  return `⏰ Ще не встигли: ${mentions}${unknownSuffix}`;
+  return `${pickRandom(NON_SUBMITTER_LEAD_POOL)} ${mentions}${unknownSuffix}`;
 }

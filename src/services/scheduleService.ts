@@ -33,6 +33,20 @@ export function getFinalReminderWeekday(config: GroupScheduleConfig): number {
   });
 }
 
+// Mirrors getFinalReminderWeekday's own "distance from deadlineWeekday, cycling through the week"
+// measure rather than comparing raw weekday numbers (0=Sun would otherwise look "first" even when
+// it's chronologically the last reminder before a Monday deadline): the first reminder is whichever
+// configured weekday is *farthest* from deadlineWeekday going in the same cyclic direction. Only
+// meaningful when there's more than one reminder configured — with just one, it's also the final
+// reminder, so callers gate on reminderWeekdays.length > 1 rather than comparing the two results.
+export function getFirstReminderWeekday(config: GroupScheduleConfig): number {
+  return config.reminderWeekdays.reduce((farthest, weekday) => {
+    const distance = (config.deadlineWeekday - weekday + 7) % 7;
+    const farthestDistance = (config.deadlineWeekday - farthest + 7) % 7;
+    return distance > farthestDistance ? weekday : farthest;
+  });
+}
+
 // A reminder that lands on the deadline weekday at/after lockTime would tell people to add a
 // place after submissions are already closed — catches that regardless of which side (reminder
 // or deadline) is the one being edited, since either edit can create the conflict.
@@ -81,9 +95,4 @@ export function updateRatingSurveySchedule(chatId: number, weekday: number, time
   const current = getGroupSchedule(chatId);
   setGroupSchedule(chatId, { ...current, ratingSurveyWeekday: weekday, ratingSurveyTime: time });
   return { ok: true };
-}
-
-export function setRatingSurveyEnabled(chatId: number, enabled: boolean): void {
-  const current = getGroupSchedule(chatId);
-  setGroupSchedule(chatId, { ...current, ratingSurveyEnabled: enabled });
 }

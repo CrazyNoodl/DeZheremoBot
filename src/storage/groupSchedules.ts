@@ -11,18 +11,20 @@ export interface GroupScheduleConfig {
   deadlineWeekday: number; // 0-6, day lock+draw happen on
   lockTime: string; // "HH:MM"
   drawTime: string; // "HH:MM", must be > lockTime same day
-  ratingSurveyEnabled: boolean; // whether the post-draw rating DM is sent at all
   ratingSurveyWeekday: number; // 0-6, day the rating survey goes out on
   ratingSurveyTime: string; // "HH:MM"
 }
 
+// Whether the survey is sent at all (ratingSurveyEnabled) deliberately isn't a field here — it
+// lives in storage/ratingSurveyState.ts instead, alongside chat_pauses, specifically so
+// resetGroupSchedule below doesn't also silently re-enable/disable it as a side effect of
+// resetting the day/time (see "Post-draw rating survey" in CLAUDE.md).
 export const DEFAULT_SCHEDULE: GroupScheduleConfig = {
   reminderWeekdays: [1, 3, 5], // Mon/Wed/Fri
   reminderTime: '10:00',
   deadlineWeekday: 5, // Friday
   lockTime: '18:00',
   drawTime: '18:15',
-  ratingSurveyEnabled: true,
   ratingSurveyWeekday: 0, // Sunday
   ratingSurveyTime: '15:00',
 };
@@ -39,7 +41,7 @@ function persist(): void {
 
 export function getGroupSchedule(chatId: number): GroupScheduleConfig {
   // Merged rather than an all-or-nothing fallback: a chat that customized its schedule before a
-  // new field (e.g. ratingSurveyEnabled) existed has a persisted object missing that key, which
+  // new field (e.g. ratingSurveyWeekday) existed has a persisted object missing that key, which
   // would otherwise come back as undefined instead of picking up the new default.
   return { ...DEFAULT_SCHEDULE, ...(schedules[chatId] ?? {}) };
 }

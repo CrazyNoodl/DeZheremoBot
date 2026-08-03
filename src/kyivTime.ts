@@ -20,6 +20,26 @@ const kyivDateFormatter = new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
 });
 
+// Used by /admin's audit log viewer to render admin_actions.created_at (a raw epoch ms) as a
+// readable Kyiv timestamp, independent of the server's own timezone.
+const kyivDateTimeFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: TIMEZONE,
+  hourCycle: 'h23',
+  day: '2-digit',
+  month: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+export function formatKyivDateTime(ms: number): string {
+  const parts = kyivDateTimeFormatter.formatToParts(new Date(ms));
+  const day = parts.find((p) => p.type === 'day')!.value;
+  const month = parts.find((p) => p.type === 'month')!.value;
+  const hour = parts.find((p) => p.type === 'hour')!.value;
+  const minute = parts.find((p) => p.type === 'minute')!.value;
+  return `${day}.${month} ${hour}:${minute}`;
+}
+
 // Shared by scheduler.ts's per-minute tick and commands/schedule.ts's admin "force draw now"
 // action — both need the same notion of "today" in Kyiv time to mark fired_events consistently,
 // independent of the server's own timezone.

@@ -1,5 +1,10 @@
 import { listBlockedUsersInGroup } from './submissionService.js';
 import { getLatestDraw, getSubmissionsForDraw, type HistorySubmission } from '../storage/history.js';
+import {
+  disableRatingSurvey,
+  enableRatingSurvey,
+  isRatingSurveyEnabled as isEnabled,
+} from '../storage/ratingSurveyState.js';
 
 export interface RatingSurveyContext {
   drawId: number;
@@ -20,4 +25,16 @@ export function getRatingSurveyContext(chatId: number): RatingSurveyContext | un
   const recipients = getSubmissionsForDraw(draw.id).filter((s) => !blockedIds.has(s.userId));
 
   return { drawId: draw.id, winnerPlace: draw.winnerPlace, recipients };
+}
+
+export function isRatingSurveyEnabled(chatId: number): boolean {
+  return isEnabled(chatId);
+}
+
+export function setRatingSurveyEnabled(chatId: number, enabled: boolean): void {
+  if (enabled) {
+    enableRatingSurvey(chatId);
+  } else {
+    disableRatingSurvey(chatId);
+  }
 }

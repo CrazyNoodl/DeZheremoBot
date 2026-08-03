@@ -17,11 +17,13 @@ const { DEFAULT_SCHEDULE } = await import('../storage/groupSchedules.js');
 const { hasFiredToday } = await import('../storage/firedEvents.js');
 const { getKyivNow } = await import('../kyivTime.js');
 const { listAdminActions } = await import('../storage/auditLog.js');
+const { setRatingSurveyEnabled } = await import('../services/ratingService.js');
 
 function fakeCtx(status: string, userId: number) {
   const replies: string[] = [];
   const alerts: string[] = [];
   const sentMessages: { chatId: number; text: string; extra?: object }[] = [];
+  const replyButtonTexts: string[][] = [];
   const ctx = {
     from: { id: userId },
     chat: { id: userId },
@@ -41,15 +43,20 @@ function fakeCtx(status: string, userId: number) {
         return { message_id: 999 };
       },
     },
-    reply: async (text: string) => {
+    reply: async (
+      text: string,
+      extra?: { reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } },
+    ) => {
       replies.push(text);
+      const buttons = (extra?.reply_markup?.inline_keyboard ?? []).flat();
+      replyButtonTexts.push(buttons.map((b) => b.text));
       return { message_id: 1 };
     },
     answerCbQuery: async (text?: string, extra?: { show_alert?: boolean }) => {
       if (extra?.show_alert && text) alerts.push(text);
     },
   };
-  return { ctx: ctx as unknown as Context, rawCtx: ctx, replies, alerts, sentMessages };
+  return { ctx: ctx as unknown as Context, rawCtx: ctx, replies, alerts, sentMessages, replyButtonTexts };
 }
 
 function withCallbackData(rawCtx: { callbackQuery?: { data: string } }, data: string) {
@@ -148,7 +155,14 @@ test('handleScheduleAction sends a tagged reminder and marks it fired when a cur
 
   assert.equal(sentMessages.length, 1);
   assert.equal(sentMessages[0].chatId, chatId);
-  assert.match(sentMessages[0].text, /ДеЖеремо цього тижня/);
+  // Mirrors scheduler.ts's own FINAL_REMINDER_POOL — sendTaggedReminder always uses the "final"
+  // wording pool, randomized, so this checks pool membership rather than one fixed phrase.
+  const finalReminderTexts = [
+    'ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇',
+    'Наближається дедлайн — хто ще не встиг, тисни кнопку 👇',
+    'Останній шанс запропонувати заклад цього тижня — тисни кнопку 👇',
+  ];
+  assert.ok(finalReminderTexts.some((t) => sentMessages[0].text.includes(t)));
   assert.equal(hasFiredToday(chatId, 'reminder', getKyivNow().date), true);
   assert.equal(listAdminActions(chatId)[0]?.action, 'remind');
 });
@@ -210,32 +224,66 @@ test('handleScheduleTextStep does not log an audit entry for an invalid time (no
   assert.deepEqual(listAdminActions(chatId), []);
 });
 
-test('handleScheduleAction refuses "rating_toggle" for a demoted admin and leaves the flag untouched', async () => {
+// The enable/disable toggle moved to /admin's own "⭐ Опитування" category (live-cycle control,
+// like pause/resume) — see commands/admin.test.ts's "rating_survey_toggle" coverage. This screen
+// now only shows the (read-only) state for context and lets an admin change day/time.
+test('"sched:rating" shows the day/time sub-screen without a toggle button', async () => {
   const userId = 20030;
   const chatId = -20030;
 
-  const { ctx, rawCtx, alerts } = fakeCtx('member', userId);
-  withCallbackData(rawCtx, `sched:rating_toggle:${chatId}`);
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `sched:rating:${chatId}`);
   await handleScheduleAction(ctx);
 
-  assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
-  assert.equal(getSchedule(chatId).ratingSurveyEnabled, DEFAULT_SCHEDULE.ratingSurveyEnabled);
-  assert.deepEqual(listAdminActions(chatId), []);
+  assert.equal(replies.some((r) => /з оцінкою закладу/.test(r)), true);
+  assert.equal(replies.some((r) => /Стан: увімкнено/.test(r)), true);
 });
 
-test('a current admin tapping "rating_toggle" flips the flag and logs it', async () => {
-  const userId = 20031;
-  const chatId = -20031;
-  assert.equal(getSchedule(chatId).ratingSurveyEnabled, true); // starts at the default (enabled)
+test('the "⭐ Опитування" summary button is hidden while the survey is disabled for that group', async () => {
+  const userId = 20040;
+  const chatId = -20040;
+  setRatingSurveyEnabled(chatId, false);
 
-  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
-  withCallbackData(rawCtx, `sched:rating_toggle:${chatId}`);
+  const { ctx, rawCtx, replies, replyButtonTexts } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `sched:select:${chatId}`);
   await handleScheduleAction(ctx);
 
-  assert.equal(getSchedule(chatId).ratingSurveyEnabled, false);
-  assert.equal(listAdminActions(chatId)[0]?.action, 'rating_toggle');
-  assert.equal(listAdminActions(chatId)[0]?.detail, 'off');
-  assert.equal(replies.some((r) => /з оцінкою закладу/.test(r)), true); // the rating sub-screen, not the main summary
+  assert.equal(replies.some((r) => /вимкнено \(умикається в \/admin/.test(r)), true);
+  assert.equal(
+    replyButtonTexts.some((buttons) => buttons.includes('⭐ Опитування')),
+    false,
+  );
+});
+
+test('the "⭐ Опитування" summary button is shown once the survey is enabled again', async () => {
+  const userId = 20041;
+  const chatId = -20041;
+  setRatingSurveyEnabled(chatId, false);
+  setRatingSurveyEnabled(chatId, true);
+
+  const { ctx, rawCtx, replyButtonTexts } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `sched:select:${chatId}`);
+  await handleScheduleAction(ctx);
+
+  assert.equal(
+    replyButtonTexts.some((buttons) => buttons.includes('⭐ Опитування')),
+    true,
+  );
+});
+
+test('the rating sub-screen hides "✏️ Змінити день і час" while the survey is disabled', async () => {
+  const userId = 20042;
+  const chatId = -20042;
+  setRatingSurveyEnabled(chatId, false);
+
+  const { ctx, rawCtx, replyButtonTexts } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `sched:rating:${chatId}`);
+  await handleScheduleAction(ctx);
+
+  assert.equal(
+    replyButtonTexts.some((buttons) => buttons.includes('✏️ Змінити день і час')),
+    false,
+  );
 });
 
 test('handleScheduleAction refuses "rating_edit" for a demoted admin and starts no wizard', async () => {

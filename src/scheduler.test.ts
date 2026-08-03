@@ -10,7 +10,7 @@ import type { Telegraf } from 'telegraf';
 // DEZHEREMO_DATA_DIR once at import time — same isolation approach as commands/schedule.test.ts.
 process.env.DEZHEREMO_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'dzb-scheduler-'));
 
-const { runSchedulerTick } = await import('./scheduler.js');
+const { getLastTickAt, runSchedulerTick } = await import('./scheduler.js');
 const { addGroupChat } = await import('./storage/groupChats.js');
 const { setGroupSchedule } = await import('./storage/groupSchedules.js');
 const { hasFiredToday } = await import('./storage/firedEvents.js');
@@ -22,6 +22,7 @@ const {
   pauseGroup,
   submitPlace,
 } = await import('./services/submissionService.js');
+const { setRatingSurveyEnabled } = await import('./services/ratingService.js');
 
 function fakeBot(chatMembersCount = 0) {
   const sentMessages: Array<{ chatId: number; text: string }> = [];
@@ -55,6 +56,22 @@ function messagesFor(sentMessages: Array<{ chatId: number; text: string }>, chat
   return sentMessages.filter((m) => m.chatId === chatId);
 }
 
+// Placed before any other test in this file: runSchedulerTick is called by every test below, and
+// lastTickAt is a module-level var shared across the whole file, so "null before any tick" only
+// holds if this runs first.
+test('getLastTickAt is null before the first tick, then reflects real wall-clock time after one', () => {
+  assert.equal(getLastTickAt(), null);
+
+  const before = Date.now();
+  const { bot } = fakeBot();
+  runSchedulerTick(bot, { weekday: 1, time: '00:00', date: '2024-01-01' });
+  const after = Date.now();
+
+  const tickAt = getLastTickAt();
+  assert.notEqual(tickAt, null);
+  assert.equal(tickAt! >= before && tickAt! <= after, true);
+});
+
 test('a plain reminder fires once reminderTime has passed and marks it fired for today', async () => {
   const chatId = -24001;
   addGroupChat(chatId, 'Test Group');
@@ -66,7 +83,6 @@ test('a plain reminder fires once reminderTime has passed and marks it fired for
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: false,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -79,7 +95,7 @@ test('a plain reminder fires once reminderTime has passed and marks it fired for
 
   const mine = messagesFor(sentMessages, chatId);
   assert.equal(mine.length, 1);
-  assert.match(mine[0].text, /ДеЖеремо цього тижня/);
+  assert.ok([...FIRST_REMINDER_TEXTS, ...FINAL_REMINDER_TEXTS].some((t) => mine[0].text.includes(t)));
   assert.doesNotMatch(mine[0].text, /Ще не встигли|Усі вже встигли|кого я не бачив/);
   assert.equal(hasFiredToday(chatId, 'reminder', '2026-08-04'), true);
 });
@@ -93,7 +109,6 @@ test('a reminder does not fire twice for the same calendar day', async () => {
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: false,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -116,7 +131,6 @@ test('the reminder closest to the deadline is tagged with the non-submitter extr
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: false,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -131,6 +145,90 @@ test('the reminder closest to the deadline is tagged with the non-submitter extr
   assert.match(mine[0].text, /кого я не бачив/);
 });
 
+// Mirrors scheduler.ts's own FIRST_REMINDER_POOL/FINAL_REMINDER_POOL — the wording is now randomized
+// per pool, so these tests assert pool membership rather than a single fixed phrase.
+const FIRST_REMINDER_TEXTS = [
+  'ДеЖеремо цього тижня! Обирай заклад — тисни кнопку 👇',
+  'Новий тиждень — новий заклад! Тисни кнопку і пропонуй 👇',
+  'Час обирати, де їмо цього тижня — тисни кнопку 👇',
+];
+const FINAL_REMINDER_TEXTS = [
+  'ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇',
+  'Наближається дедлайн — хто ще не встиг, тисни кнопку 👇',
+  'Останній шанс запропонувати заклад цього тижня — тисни кнопку 👇',
+];
+
+test('the first reminder of the week gets the opening text instead of "Хто ще не встиг"', async () => {
+  const chatId = -24020;
+  addGroupChat(chatId, 'Test Group');
+  // Mon(1) is farthest from the Fri(5) deadline, so it's the first reminder; Wed(3) is neither
+  // first nor final and keeps the old wording (see the next test).
+  setGroupSchedule(chatId, {
+    reminderWeekdays: [1, 3, 5],
+    reminderTime: '10:00',
+    deadlineWeekday: 5,
+    lockTime: '18:00',
+    drawTime: '18:15',
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
+  });
+  const { bot, sentMessages } = fakeBot();
+
+  runSchedulerTick(bot, { weekday: 1, time: '10:00', date: '2026-08-03' });
+  await flush();
+
+  const mine = messagesFor(sentMessages, chatId);
+  assert.equal(mine.length, 1);
+  assert.ok(FIRST_REMINDER_TEXTS.some((t) => mine[0].text.includes(t)));
+  assert.ok(FINAL_REMINDER_TEXTS.every((t) => !mine[0].text.includes(t)));
+});
+
+test('a middle reminder (neither first nor final) keeps the "Хто ще не встиг" text', async () => {
+  const chatId = -24021;
+  addGroupChat(chatId, 'Test Group');
+  setGroupSchedule(chatId, {
+    reminderWeekdays: [1, 3, 5],
+    reminderTime: '10:00',
+    deadlineWeekday: 5,
+    lockTime: '18:00',
+    drawTime: '18:15',
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
+  });
+  const { bot, sentMessages } = fakeBot();
+
+  runSchedulerTick(bot, { weekday: 3, time: '10:00', date: '2026-08-05' });
+  await flush();
+
+  const mine = messagesFor(sentMessages, chatId);
+  assert.equal(mine.length, 1);
+  assert.ok(FINAL_REMINDER_TEXTS.some((t) => mine[0].text.includes(t)));
+});
+
+test('with only one reminder configured it keeps the "Хто ще не встиг" text, not the opening one', async () => {
+  const chatId = -24022;
+  addGroupChat(chatId, 'Test Group');
+  // A single reminder is simultaneously "first" and "final" — the final/tagged branch always wins,
+  // so it must not pick up the first-reminder wording just because reminderWeekdays.length === 1.
+  setGroupSchedule(chatId, {
+    reminderWeekdays: [5],
+    reminderTime: '10:00',
+    deadlineWeekday: 5,
+    lockTime: '18:00',
+    drawTime: '18:15',
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
+  });
+  const { bot, sentMessages } = fakeBot(1);
+
+  runSchedulerTick(bot, { weekday: 5, time: '10:00', date: '2026-08-07' });
+  await flush();
+
+  const mine = messagesFor(sentMessages, chatId);
+  assert.equal(mine.length, 1);
+  assert.ok(FINAL_REMINDER_TEXTS.some((t) => mine[0].text.includes(t)));
+});
+
 test('a reminder only fires for chats whose own schedule actually matches the tick', async () => {
   const matching = -24004;
   const nonMatching = -24005;
@@ -142,7 +240,6 @@ test('a reminder only fires for chats whose own schedule actually matches the ti
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: false,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -152,7 +249,6 @@ test('a reminder only fires for chats whose own schedule actually matches the ti
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: false,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -176,7 +272,6 @@ test('lockTime passing locks submissions for that chat and marks it fired', () =
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '23:59',
-    ratingSurveyEnabled: false,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -200,7 +295,6 @@ test('drawTime passing with a submission picks a winner, records history, resets
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: false,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -227,7 +321,6 @@ test('drawTime passing with no submissions announces "nobody submitted" instead 
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: false,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -251,7 +344,6 @@ test('a draw does not fire twice for the same calendar day', async () => {
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: false,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -276,7 +368,6 @@ test('the rating survey fires on its own configured day/time and DMs each submit
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: true,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -304,10 +395,10 @@ test('the rating survey does not fire when disabled', async () => {
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: false,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
+  setRatingSurveyEnabled(chatId, false); // now a separate live-cycle flag, not part of GroupScheduleConfig
   submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
   const { bot, sentMessages } = fakeBot();
 
@@ -329,7 +420,6 @@ test('the rating survey marks fired but sends nothing when the latest draw had n
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: true,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -354,7 +444,6 @@ test('a paused chat still marks the rating survey fired but skips sending it', a
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: true,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -382,7 +471,6 @@ test('the rating survey does not fire twice for the same calendar day', async ()
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: true,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -410,7 +498,6 @@ test('the rating survey does not DM a submitter who was blocked after that week\
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: true,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });
@@ -440,7 +527,6 @@ test('a paused chat still marks reminder/lock/draw fired for today but skips the
     deadlineWeekday: 5,
     lockTime: '18:00',
     drawTime: '18:15',
-    ratingSurveyEnabled: false,
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
   });

@@ -103,6 +103,19 @@ test('withGroupLabel escapes HTML-special characters in the group title', () => 
 
 // --- buildMenuText ---
 
+// Mirrors menuMessage.ts's own EMPTY_MENU_POOL/HAS_SUBMISSION_MENU_POOL — the trailing phrase is
+// now randomized per pool, so tests assert pool membership rather than a single fixed substring.
+const EMPTY_MENU_TEXTS = [
+  'Цього тижня ще порожньо — станеш першим? Тисни кнопку нижче 👇',
+  'Поки що жодного варіанту — може, твій стане вибором тижня? Тисни кнопку нижче 👇',
+  'Тиша... Запропонуй заклад першим — тисни кнопку нижче 👇',
+];
+const HAS_SUBMISSION_MENU_TEXTS = [
+  'Хочеш змінити — тисни кнопку нижче 👇',
+  'Щось краще на думці? Тисни кнопку нижче 👇',
+  'Можеш змінити будь-коли — тисни кнопку нижче 👇',
+];
+
 test('buildMenuText shows the "no submission yet" text with the group\'s actual configured deadline', () => {
   const groupChatId = -23004;
   const userId = 23004;
@@ -110,7 +123,7 @@ test('buildMenuText shows the "no submission yet" text with the group\'s actual 
 
   const text = buildMenuText(groupChatId, userId);
 
-  assert.match(text, /поки що порожньо/);
+  assert.ok(EMPTY_MENU_TEXTS.some((t) => text.includes(t)));
   assert.match(text, /Ср, 19:30/); // Wednesday (index 3), distinct from DEFAULT_SCHEDULE's Пт 18:00
 });
 
@@ -121,19 +134,20 @@ test('buildMenuText shows the submitted place (rendered via placeLink) for a use
 
   const text = buildMenuText(groupChatId, userId);
 
-  assert.match(text, /Твій варіант цього тижня/);
+  assert.match(text, /Твій вибір цього тижня/);
+  assert.ok(HAS_SUBMISSION_MENU_TEXTS.some((t) => text.includes(t)));
   assert.match(text, /somewhere/); // placeLink extracts the Instagram username as the link label
 });
 
-test('buildMenuText shows the decline text and omits "Твій варіант" for a user who declined', () => {
+test('buildMenuText shows the decline text and omits "Твій вибір" for a user who declined', () => {
   const groupChatId = -23006;
   const userId = 23006;
   declinePlace(groupChatId, userId, 'tester');
 
   const text = buildMenuText(groupChatId, userId);
 
-  assert.match(text, /не йдеш/);
-  assert.doesNotMatch(text, /Твій варіант/);
+  assert.match(text, /цього тижня тебе не буде/);
+  assert.doesNotMatch(text, /Твій вибір/);
 });
 
 // --- buildMenuKeyboard ---

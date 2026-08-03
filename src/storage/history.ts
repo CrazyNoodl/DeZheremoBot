@@ -13,6 +13,12 @@ if (DB_FILE !== ':memory:') {
 // same append-only-log shape, one connection rather than two onto the same file.
 export const db = new DatabaseSync(DB_FILE);
 
+// Exposed for storage/diagnostics.ts's DB-size reporting — see the identical getStateDbPath in
+// storage/db.ts.
+export function getHistoryDbPath(): string {
+  return DB_FILE;
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS weekly_draws (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,6 +116,49 @@ const submissionsForDrawStmt = db.prepare(`
 // decliner's row — so this is already exactly the "who to ask to rate" roster, no filtering needed.
 export function getSubmissionsForDraw(drawId: number): HistorySubmission[] {
   return submissionsForDrawStmt.all(drawId) as unknown as HistorySubmission[];
+}
+
+export interface PlaceWinCount {
+  place: string;
+  wins: number;
+}
+
+const topWinningPlacesStmt = db.prepare(`
+  SELECT winner_place AS place, COUNT(*) AS wins
+  FROM weekly_draws
+  WHERE chat_id = ? AND winner_place IS NOT NULL
+  GROUP BY winner_place
+  ORDER BY wins DESC
+`);
+
+// Every place that has ever won a draw in this chat, ranked by how many times — used by /admin's
+// "🏆 Топ переможців" statistics tab.
+export function getTopWinningPlaces(chatId: number): PlaceWinCount[] {
+  return topWinningPlacesStmt.all(chatId) as unknown as PlaceWinCount[];
+}
+
+export interface ParticipantCount {
+  userId: number;
+  username: string;
+  submissions: number;
+}
+
+const topParticipantsStmt = db.prepare(`
+  SELECT sh.user_id AS userId, sh.username, COUNT(*) AS submissions, MAX(sh.id) AS lastId
+  FROM submissions_history sh
+  JOIN weekly_draws wd ON wd.id = sh.draw_id
+  WHERE wd.chat_id = ?
+  GROUP BY sh.user_id
+  ORDER BY submissions DESC
+`);
+
+// Same MAX(id)-follows-bare-column trick as getHistoricalSubmitters, so a renamed user shows
+// their latest username. Counts only actual place proposals (submissions_history never holds a
+// decliner's row) — used by /admin's "📈 Активність" statistics tab.
+export function getTopParticipants(chatId: number): ParticipantCount[] {
+  return (topParticipantsStmt.all(chatId) as unknown as (ParticipantCount & { lastId: number })[]).map(
+    ({ userId, username, submissions }) => ({ userId, username, submissions }),
+  );
 }
 
 export function recordDraw(record: DrawRecord): void {

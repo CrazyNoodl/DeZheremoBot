@@ -1,4 +1,5 @@
 import { Markup, type Context } from 'telegraf';
+import { pickRandom } from '../announcements.js';
 import { escapeHtml, placeLabel, placeLink } from '../htmlFormat.js';
 import { isChatMember } from './access.js';
 import { PLACE_LINK_FORMAT_HINT, promptForPlace } from './add.js';
@@ -87,6 +88,23 @@ async function renderGateIfBlocked(ctx: Context, groupChatId: number, userId: nu
   return false;
 }
 
+// Small phrase pools (same idea as announcements.ts's) for the messages a member sees most often —
+// their own submit confirmation, and the group's public announcement of it.
+const SUBMIT_CONFIRM_LEAD_POOL = ['Готово!', 'Ура, вийшло!', 'Прийнято!'] as const;
+const NEW_SUBMIT_VERB_POOL = ['пропонує варіант', 'ділиться ідеєю', 'додає варіант'] as const;
+const UPDATE_SUBMIT_VERB_POOL = ['оновлює варіант', 'змінює вибір', 'оновлює вибір'] as const;
+const DECLINE_RETRACTION_POOL: readonly ((user: string, place: string) => string)[] = [
+  (user, place) => `🙅 <b>${user}</b> цього тижня не йде (варіант знято: ${place})`,
+  (user, place) => `🙅 <b>${user}</b> цього тижня пропускає — і забирає варіант: ${place}`,
+];
+
+// Shared by handleDeclineAction and handleGroupDeclineAction — both retract an already-announced
+// place the same way, so the group-facing wording (and its pool) can't drift between the two entry
+// points.
+function buildDeclineRetractionAnnouncement(username: string, previousPlace: string): string {
+  return pickRandom(DECLINE_RETRACTION_POOL)(escapeHtml(username), placeLink(previousPlace));
+}
+
 function buildCancelDeclineText(): string {
   return 'Плани зміняться? Можеш повернути минулий варіант або ввести нове посилання 👇';
 }
@@ -146,10 +164,11 @@ export async function renderSubmitOutcome(
   }
 
   const previousPlace = result.previousPlace;
+  const confirmLead = pickRandom(SUBMIT_CONFIRM_LEAD_POOL);
   const confirmation =
     previousPlace !== undefined
-      ? `Готово! Змінено на: ${placeLink(place)} (було: ${placeLink(previousPlace)}) 👍`
-      : `Готово! Додано: ${placeLink(place)} 🎉`;
+      ? `${confirmLead} Змінено на: ${placeLink(place)} (було: ${placeLink(previousPlace)}) 👍`
+      : `${confirmLead} Додано: ${placeLink(place)} 🎉`;
 
   await updateMenuMessage(
     ctx,
@@ -162,8 +181,8 @@ export async function renderSubmitOutcome(
     ctx.telegram,
     groupChatId,
     previousPlace !== undefined
-      ? `🔄 <b>${escapeHtml(username)}</b> оновлює варіант: ${placeLink(place)}`
-      : `🍽 <b>${escapeHtml(username)}</b> пропонує варіант: ${placeLink(place)}`,
+      ? `🔄 <b>${escapeHtml(username)}</b> ${pickRandom(UPDATE_SUBMIT_VERB_POOL)}: ${placeLink(place)}`
+      : `🍽 <b>${escapeHtml(username)}</b> ${pickRandom(NEW_SUBMIT_VERB_POOL)}: ${placeLink(place)}`,
     { parse_mode: 'HTML' },
   );
 }
@@ -255,12 +274,9 @@ export async function handleDeclineAction(ctx: Context): Promise<void> {
     // Declining overwrote a place the group already saw announced — tell the group it's been
     // retracted. A decline with nothing to retract (result.previousPlace undefined) stays silent:
     // the group was never told about this user in the first place, so there's nothing to correct.
-    await sendToChat(
-      ctx.telegram,
-      groupChatId,
-      `🙅 <b>${escapeHtml(username)}</b> цього тижня не йде (варіант знято: ${placeLink(result.previousPlace)})`,
-      { parse_mode: 'HTML' },
-    );
+    await sendToChat(ctx.telegram, groupChatId, buildDeclineRetractionAnnouncement(username, result.previousPlace), {
+      parse_mode: 'HTML',
+    });
   }
 
   await updateMenuMessage(ctx, groupChatId, userId, buildMenuText(groupChatId, userId), buildMenuKeyboard(groupChatId, userId));
@@ -308,12 +324,9 @@ export async function handleGroupDeclineAction(ctx: Context): Promise<void> {
   }
 
   if (result.previousPlace !== undefined) {
-    await sendToChat(
-      ctx.telegram,
-      chatId,
-      `🙅 <b>${escapeHtml(username)}</b> цього тижня не йде (варіант знято: ${placeLink(result.previousPlace)})`,
-      { parse_mode: 'HTML' },
-    );
+    await sendToChat(ctx.telegram, chatId, buildDeclineRetractionAnnouncement(username, result.previousPlace), {
+      parse_mode: 'HTML',
+    });
   }
 
   await safeAnswerCbQuery(ctx, '🙅 Записано: не йдеш цього тижня.');

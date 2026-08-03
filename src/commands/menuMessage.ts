@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/node';
 import { Markup, TelegramError, type Context } from 'telegraf';
+import { pickRandom } from '../announcements.js';
 import { escapeHtml, placeLink } from '../htmlFormat.js';
 import { getSchedule } from '../services/scheduleService.js';
 import { getUserSubmission } from '../services/submissionService.js';
@@ -31,15 +32,29 @@ function deadlineLabel(groupChatId: number): string {
   return `${WEEKDAY_LABELS[schedule.deadlineWeekday]}, ${schedule.lockTime}`;
 }
 
+// Small pools (same idea as announcements.ts's phrase pools) so the two states a member sees most
+// often — nothing submitted yet, or a submission already on file — don't read identically every
+// single time the menu card renders.
+const EMPTY_MENU_POOL = [
+  'Цього тижня ще порожньо — станеш першим? Тисни кнопку нижче 👇',
+  'Поки що жодного варіанту — може, твій стане вибором тижня? Тисни кнопку нижче 👇',
+  'Тиша... Запропонуй заклад першим — тисни кнопку нижче 👇',
+] as const;
+const HAS_SUBMISSION_MENU_POOL = [
+  'Хочеш змінити — тисни кнопку нижче 👇',
+  'Щось краще на думці? Тисни кнопку нижче 👇',
+  'Можеш змінити будь-коли — тисни кнопку нижче 👇',
+] as const;
+
 export function buildMenuText(groupChatId: number, userId: number): string {
   const submission = getUserSubmission(groupChatId, userId);
   const deadlineLine = `<i>⏰ Дедлайн: ${deadlineLabel(groupChatId)}</i>\n\n`;
   if (submission?.status === 'declined') {
-    return `${deadlineLine}🙅 Записано: цього тижня ти не йдеш.\n\nПлани зміняться — тисни кнопку нижче 👇`;
+    return `${deadlineLine}🙅 Ок, зрозуміли — цього тижня тебе не буде.\n\nПлани зміняться — тисни кнопку нижче 👇`;
   }
   return submission
-    ? `${deadlineLine}📍 Твій варіант цього тижня: ${placeLink(submission.place)}\n\nХочеш змінити — тисни кнопку нижче 👇`
-    : `${deadlineLine}🍽 На цей тиждень поки що порожньо — стань першим і запропонуй заклад, тисни кнопку нижче 👇`;
+    ? `${deadlineLine}📍 Твій вибір цього тижня: ${placeLink(submission.place)}\n\n${pickRandom(HAS_SUBMISSION_MENU_POOL)}`
+    : `${deadlineLine}🍽 ${pickRandom(EMPTY_MENU_POOL)}`;
 }
 
 export function buildMenuKeyboard(groupChatId: number, userId: number) {

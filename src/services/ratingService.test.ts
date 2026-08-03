@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { getRatingSurveyContext } from './ratingService.js';
+import { getRatingSurveyContext, isRatingSurveyEnabled, setRatingSurveyEnabled } from './ratingService.js';
 import { blockUserFromGroup } from './submissionService.js';
 import { recordDraw } from '../storage/history.js';
 
@@ -54,4 +54,15 @@ test('getRatingSurveyContext excludes a submitter who was blocked after submitti
     context.recipients.map((r) => r.userId),
     [1],
   );
+});
+
+test('a chat is rating-survey-enabled by default, and setRatingSurveyEnabled toggles it', () => {
+  const chatId = -10005;
+  assert.equal(isRatingSurveyEnabled(chatId), true);
+
+  setRatingSurveyEnabled(chatId, false);
+  assert.equal(isRatingSurveyEnabled(chatId), false);
+
+  setRatingSurveyEnabled(chatId, true);
+  assert.equal(isRatingSurveyEnabled(chatId), true);
 });

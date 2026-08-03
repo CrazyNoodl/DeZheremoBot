@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { escapeHtml, placeLabel, placeLink } from './htmlFormat.js';
+import { escapeHtml, placeLabel, placeLabelWithHint, placeLink, placeLinkWithHint } from './htmlFormat.js';
 
 test('escapeHtml escapes & individually', () => {
   assert.equal(escapeHtml('a & b'), 'a &amp; b');
@@ -101,4 +101,43 @@ test('placeLink escapes a " smuggled in via the permissive trailing query string
 
   assert.ok(!hrefValue.includes('"'), `href value should not contain a raw unescaped quote: ${hrefValue}`);
   assert.ok(hrefValue.includes('&quot;'), `href value should contain the escaped quote: ${hrefValue}`);
+});
+
+test('placeLabelWithHint leaves an Instagram username untouched (already unambiguous, no hint needed)', () => {
+  assert.equal(placeLabelWithHint('https://www.instagram.com/milkbarkyiv'), 'milkbarkyiv');
+});
+
+test('placeLabelWithHint appends a short tail of the URL to the generic "заклад" fallback', () => {
+  assert.equal(placeLabelWithHint('https://expz.menu/11111111-1111-1111-1111-1111111111aa'), 'заклад (…11aa)');
+});
+
+test('placeLabelWithHint gives two different generic-fallback places distinct hints', () => {
+  const a = placeLabelWithHint('https://expz.menu/11111111-1111-1111-1111-1111111111aa');
+  const b = placeLabelWithHint('https://expz.menu/22222222-2222-2222-2222-2222222222bb');
+  assert.notEqual(a, b);
+});
+
+test('placeLabelWithHint strips a trailing query string before taking the hint tail, not the tracking param', () => {
+  assert.equal(
+    placeLabelWithHint('https://expz.menu/11111111-1111-1111-1111-1111111111aa?utm=abcdefgh'),
+    'заклад (…11aa)',
+  );
+});
+
+test('placeLabelWithHint strips a trailing slash before taking the hint tail', () => {
+  assert.equal(placeLabelWithHint('https://maps.app.goo.gl/AbCdEf12345/'), 'заклад (…2345)');
+});
+
+test('placeLinkWithHint renders the generic fallback as a clickable link labeled with the hint', () => {
+  assert.equal(
+    placeLinkWithHint('https://expz.menu/11111111-1111-1111-1111-1111111111aa'),
+    '<a href="https://expz.menu/11111111-1111-1111-1111-1111111111aa">заклад (…11aa)</a>',
+  );
+});
+
+test('placeLinkWithHint renders an Instagram link exactly like placeLink (no hint)', () => {
+  assert.equal(
+    placeLinkWithHint('https://www.instagram.com/milkbarkyiv'),
+    placeLink('https://www.instagram.com/milkbarkyiv'),
+  );
 });

@@ -1,14 +1,14 @@
 import cron from 'node-cron';
 import * as Sentry from '@sentry/node';
 import type { Telegraf, Telegram } from 'telegraf';
-import { buildDrawAnnouncement, buildFinalReminderExtra, pickRandomEmoji } from './announcements.js';
+import { buildDrawAnnouncement, buildFinalReminderExtra, pickRandom, pickRandomEmoji } from './announcements.js';
 import { buildGroupMenu } from './commands/keyboard.js';
 import { buildRatingKeyboard } from './commands/rating.js';
 import { placeLink } from './htmlFormat.js';
 import { getKyivNow } from './kyivTime.js';
-import { getRatingSurveyContext } from './services/ratingService.js';
+import { getRatingSurveyContext, isRatingSurveyEnabled } from './services/ratingService.js';
 import { getNonSubmittersInfo } from './services/reminderService.js';
-import { getFinalReminderWeekday } from './services/scheduleService.js';
+import { getFinalReminderWeekday, getFirstReminderWeekday } from './services/scheduleService.js';
 import {
   isGroupPaused,
   isRepeatWinner,
@@ -24,8 +24,40 @@ import { sendDirectMessage, sendToChat } from './telegramBroadcast.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// In-memory, real wall-clock (not the simulated/tested `now` runSchedulerTick takes for Kyiv
+// weekday/time) — the /admin diagnostics screen uses this to tell "the per-minute tick is still
+// firing" from "it's stuck," which only needs to survive within one running process, the same
+// cheap-to-lose reasoning as pendingState.ts/menuMessages.ts.
+let lastTickAt: number | null = null;
+
+export function getLastTickAt(): number | null {
+  return lastTickAt;
+}
+
 // Rotated so the same weekly message doesn't read as identically robotic every time.
 const REMINDER_EMOJI = ['🍽', '🍕', '🥗', '🍜'] as const;
+
+// "Хто ще не встиг" (who hasn't managed yet) reads oddly as the very first nudge of the week, since
+// it implies the deadline is close — only the non-first reminders (including the tagged final one)
+// use that phrasing. buildReminderBaseText is shared by sendTaggedReminder and sendReminder's own
+// non-final branch so the two never drift into wording a first/non-first reminder differently.
+// Each is a small pool (mirroring REMINDER_EMOJI) so the phrasing itself varies week to week, not
+// just the emoji in front of it.
+const FIRST_REMINDER_POOL = [
+  'ДеЖеремо цього тижня! Обирай заклад — тисни кнопку 👇',
+  'Новий тиждень — новий заклад! Тисни кнопку і пропонуй 👇',
+  'Час обирати, де їмо цього тижня — тисни кнопку 👇',
+] as const;
+const FINAL_REMINDER_POOL = [
+  'ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇',
+  'Наближається дедлайн — хто ще не встиг, тисни кнопку 👇',
+  'Останній шанс запропонувати заклад цього тижня — тисни кнопку 👇',
+] as const;
+
+function buildReminderBaseText(isFirst: boolean): string {
+  const phrase = pickRandom(isFirst ? FIRST_REMINDER_POOL : FINAL_REMINDER_POOL);
+  return `${pickRandomEmoji(REMINDER_EMOJI)} ${phrase}`;
+}
 
 // getChatMembersCount can fail (rate limit, transient network) — falling back to "no unknown
 // members" degrades to just tagging the people we do know about instead of losing the whole
@@ -45,7 +77,7 @@ async function fetchTotalMembers(telegram: Telegram, chatId: number): Promise<nu
 // "force reminder now" button — so an admin manually nudging stragglers gets the exact same
 // tagged message a scheduled final reminder would have sent.
 export async function sendTaggedReminder(telegram: Telegram, botUsername: string, chatId: number): Promise<void> {
-  const baseText = `${pickRandomEmoji(REMINDER_EMOJI)} ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇`;
+  const baseText = buildReminderBaseText(false);
   const keyboard = buildGroupMenu(botUsername, chatId);
 
   const totalMembers = await fetchTotalMembers(telegram, chatId);
@@ -62,7 +94,8 @@ export async function sendTaggedReminder(telegram: Telegram, botUsername: string
 // the deadline day itself.
 async function sendReminder(bot: Telegraf, chatId: number, schedule: GroupScheduleConfig, weekday: number): Promise<void> {
   if (weekday !== getFinalReminderWeekday(schedule)) {
-    const baseText = `${pickRandomEmoji(REMINDER_EMOJI)} ДеЖеремо цього тижня! Хто ще не встиг — тисни кнопку 👇`;
+    const isFirst = schedule.reminderWeekdays.length > 1 && weekday === getFirstReminderWeekday(schedule);
+    const baseText = buildReminderBaseText(isFirst);
     await sendToChat(bot.telegram, chatId, baseText, buildGroupMenu(bot.botInfo!.username, chatId), DAY_MS);
     return;
   }
@@ -95,6 +128,7 @@ export async function sendRatingSurvey(telegram: Telegram, chatId: number, onlyU
 // `now` in tests instead of only ever firing from a real node-cron schedule against the real
 // system clock — mirrors why getKyivNow() itself was pulled out of this file (see kyivTime.ts).
 export function runSchedulerTick(bot: Telegraf, now: { weekday: number; time: string; date: string }): void {
+  lastTickAt = Date.now();
   const { weekday, time, date } = now;
 
   for (const chatId of listGroupChats()) {
@@ -148,7 +182,7 @@ export function runSchedulerTick(bot: Telegraf, now: { weekday: number; time: st
     }
 
     if (
-      schedule.ratingSurveyEnabled &&
+      isRatingSurveyEnabled(chatId) &&
       weekday === schedule.ratingSurveyWeekday &&
       time >= schedule.ratingSurveyTime &&
       !hasFiredToday(chatId, 'ratingSurvey', date)

@@ -46,7 +46,18 @@ export async function handleRateAction(ctx: Context): Promise<void> {
   } else {
     const stars = Number(valueStr);
     addOrUpdateRating(drawId, userId, stars);
-    confirmationText = `Дякуємо, оцінка: ${stars}⭐`;
+    // A short reaction to the score itself, not just an acknowledgement that it was recorded — the
+    // tail varies by tier, but "Дякуємо, оцінка: N⭐" stays fixed so this message is still
+    // recognizable as the same confirmation every time.
+    const reaction =
+      stars === 5
+        ? 'раді, що зайшло на славу! 🤩'
+        : stars === 4
+          ? 'непогано вийшло! 😋'
+          : stars === 3
+            ? 'бувало й краще 🙂'
+            : 'врахуємо на майбутнє 😬';
+    confirmationText = `Дякуємо, оцінка: ${stars}⭐ — ${reaction}`;
   }
 
   await safeAnswerCbQuery(ctx, 'Дякуємо за відповідь!');

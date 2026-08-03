@@ -1,11 +1,11 @@
 import { Markup, type Context } from 'telegraf';
 import { getKyivNow } from '../kyivTime.js';
 import { sendTaggedReminder } from '../scheduler.js';
+import { isRatingSurveyEnabled } from '../services/ratingService.js';
 import {
   getSchedule,
   isValidTime,
   resetSchedule,
-  setRatingSurveyEnabled,
   updateDeadlineSchedule,
   updateRatingSurveySchedule,
   updateReminderSchedule,
@@ -52,39 +52,52 @@ function formatWeekdays(weekdays: number[]): string {
     .join(', ');
 }
 
-function buildSummaryText(config: GroupScheduleConfig): string {
+function buildSummaryText(chatId: number, config: GroupScheduleConfig): string {
   return (
     `⚙️ Розклад цієї групи\n\n` +
     `📅 Нагадування: ${formatWeekdays(config.reminderWeekdays)} о ${config.reminderTime}\n` +
     `🔒 Дедлайн (${WEEKDAY_LABELS[config.deadlineWeekday]}): закриття заявок ${config.lockTime}, жеребкування ${config.drawTime}\n` +
-    `⭐ Опитування: ${config.ratingSurveyEnabled ? `${WEEKDAY_LABELS[config.ratingSurveyWeekday]} о ${config.ratingSurveyTime}` : 'вимкнено'}`
+    `⭐ Опитування: ${
+      isRatingSurveyEnabled(chatId)
+        ? `${WEEKDAY_LABELS[config.ratingSurveyWeekday]} о ${config.ratingSurveyTime}`
+        : 'вимкнено (умикається в /admin → ⭐ Опитування)'
+    }`
   );
 }
 
 function buildSummaryKeyboard(chatId: number) {
-  return Markup.inlineKeyboard([
+  const rows = [
     [Markup.button.callback('✏️ Дні та час нагадувань', `sched:edit_reminder:${chatId}`)],
     [Markup.button.callback('✏️ День та час дедлайну', `sched:edit_deadline:${chatId}`)],
-    [Markup.button.callback('⭐ Опитування', `sched:rating:${chatId}`)],
+  ];
+  if (isRatingSurveyEnabled(chatId)) {
+    rows.push([Markup.button.callback('⭐ Опитування', `sched:rating:${chatId}`)]);
+  }
+  rows.push(
     [Markup.button.callback('🔔 Надіслати нагадування зараз', `sched:remind:${chatId}`)],
     [Markup.button.callback('↩️ Скинути на дефолт', `sched:reset:${chatId}`)],
-  ]);
+  );
+  return Markup.inlineKeyboard(rows);
 }
 
-function buildRatingScreenText(config: GroupScheduleConfig): string {
+// Status is shown here for context, but it's read-only — увімкнення/вимкнення moved to /admin's
+// own "⭐ Опитування" category (live-cycle control, alongside pause/resume), since this screen is
+// schedule *configuration* (day/time) only. See "Post-draw rating survey" in CLAUDE.md.
+function buildRatingScreenText(chatId: number, config: GroupScheduleConfig): string {
   return (
     `⭐ Опитування з оцінкою закладу\n\n` +
-    `Стан: ${config.ratingSurveyEnabled ? 'увімкнено' : 'вимкнено'}\n` +
+    `Стан: ${isRatingSurveyEnabled(chatId) ? 'увімкнено' : 'вимкнено'} (умикається/вимикається в /admin → ⭐ Опитування)\n` +
     `День і час: ${WEEKDAY_LABELS[config.ratingSurveyWeekday]} о ${config.ratingSurveyTime}`
   );
 }
 
-function buildRatingScreenKeyboard(chatId: number, config: GroupScheduleConfig) {
-  return Markup.inlineKeyboard([
-    [Markup.button.callback(config.ratingSurveyEnabled ? '🔕 Вимкнути' : '🔛 Увімкнути', `sched:rating_toggle:${chatId}`)],
-    [Markup.button.callback('✏️ Змінити день і час', `sched:rating_edit:${chatId}`)],
-    [Markup.button.callback('⬅️ Назад', `sched:select:${chatId}`)],
-  ]);
+function buildRatingScreenKeyboard(chatId: number) {
+  const rows = [];
+  if (isRatingSurveyEnabled(chatId)) {
+    rows.push([Markup.button.callback('✏️ Змінити день і час', `sched:rating_edit:${chatId}`)]);
+  }
+  rows.push([Markup.button.callback('⬅️ Назад', `sched:select:${chatId}`)]);
+  return Markup.inlineKeyboard(rows);
 }
 
 function buildWeekdayToggleKeyboard(selected: Set<number>) {
@@ -106,7 +119,7 @@ function buildWeekdaySingleSelectKeyboard() {
 
 async function renderSummary(ctx: Context, userId: number, chatId: number): Promise<void> {
   clearScheduleEditState(userId);
-  await panel.update(ctx, userId, buildSummaryText(getSchedule(chatId)), buildSummaryKeyboard(chatId));
+  await panel.update(ctx, userId, buildSummaryText(chatId, getSchedule(chatId)), buildSummaryKeyboard(chatId));
 }
 
 async function renderWeekdayToggleScreen(ctx: Context, userId: number, selected: Set<number>): Promise<void> {
@@ -126,7 +139,7 @@ async function renderRatingScreen(ctx: Context, userId: number, chatId: number):
   // so any leftover wizard state must be cleared here too, not just on the main summary.
   clearScheduleEditState(userId);
   const config = getSchedule(chatId);
-  await panel.update(ctx, userId, buildRatingScreenText(config), buildRatingScreenKeyboard(chatId, config));
+  await panel.update(ctx, userId, buildRatingScreenText(chatId, config), buildRatingScreenKeyboard(chatId));
 }
 
 export async function showScheduleMenu(ctx: Context, chatId: number): Promise<void> {
@@ -179,7 +192,6 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
     action === 'reset' ||
     action === 'remind' ||
     action === 'rating' ||
-    action === 'rating_toggle' ||
     action === 'rating_edit'
       ? Number(arg)
       : action === 'day' || action === 'days_done' || action === 'back'
@@ -255,21 +267,6 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
 
   if (action === 'rating') {
     const chatId = Number(arg);
-    await renderRatingScreen(ctx, userId, chatId);
-    return;
-  }
-
-  if (action === 'rating_toggle') {
-    const chatId = Number(arg);
-    const next = !getSchedule(chatId).ratingSurveyEnabled;
-    setRatingSurveyEnabled(chatId, next);
-    logAdminAction({
-      chatId,
-      actorUserId: userId,
-      actorName: ctx.from?.username ?? ctx.from?.first_name,
-      action: 'rating_toggle',
-      detail: next ? 'on' : 'off',
-    });
     await renderRatingScreen(ctx, userId, chatId);
     return;
   }

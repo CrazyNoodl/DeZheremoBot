@@ -22,12 +22,14 @@ const {
 } = await import('../services/submissionService.js');
 const { listAdminActions } = await import('../storage/auditLog.js');
 const { getRatingSelection } = await import('../storage/ratingSelectionState.js');
+const { isRatingSurveyEnabled } = await import('../services/ratingService.js');
 
 function fakeCtx(status: string, userId: number) {
   const alerts: string[] = [];
   const sentMessages: Array<{ chatId: number; text: string }> = [];
   const replies: string[] = [];
   const replyButtonTexts: string[][] = [];
+  const replyButtons: Array<Array<{ text: string; callback_data: string }>> = [];
   const ctx = {
     from: { id: userId },
     chat: { id: userId },
@@ -45,16 +47,21 @@ function fakeCtx(status: string, userId: number) {
         return { message_id: 1 };
       },
     },
-    reply: async (text: string, extra?: { reply_markup?: { inline_keyboard: Array<Array<{ text: string }>> } }) => {
+    reply: async (
+      text: string,
+      extra?: { reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } },
+    ) => {
       replies.push(text);
-      replyButtonTexts.push((extra?.reply_markup?.inline_keyboard ?? []).flat().map((b) => b.text));
+      const buttons = (extra?.reply_markup?.inline_keyboard ?? []).flat();
+      replyButtonTexts.push(buttons.map((b) => b.text));
+      replyButtons.push(buttons);
       return { message_id: 1 };
     },
     answerCbQuery: async (text?: string, extra?: { show_alert?: boolean }) => {
       if (extra?.show_alert && text) alerts.push(text);
     },
   };
-  return { ctx: ctx as unknown as Context, rawCtx: ctx, alerts, sentMessages, replies, replyButtonTexts };
+  return { ctx: ctx as unknown as Context, rawCtx: ctx, alerts, sentMessages, replies, replyButtonTexts, replyButtons };
 }
 
 function withCallbackData(rawCtx: { callbackQuery?: { data: string } }, data: string) {
@@ -309,27 +316,67 @@ test('handleAdminAction refuses "blocklist" for a user who is no longer an admin
   assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
 });
 
-test('handleAdminAction refuses "rating" for a user who is no longer an admin and starts no selection', async () => {
+test('handleAdminAction refuses "rating" for a user who is no longer an admin', async () => {
   const userId = 30016;
   const chatId = -30016;
 
-  const { ctx, rawCtx, alerts } = fakeCtx('member', userId);
+  const { ctx, rawCtx, alerts, replies } = fakeCtx('member', userId);
   withCallbackData(rawCtx, `admin:rating:${chatId}`);
   await handleAdminAction(ctx);
 
   assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
-  assert.equal(getRatingSelection(userId), undefined);
+  assert.equal(replies.length, 0);
 });
 
-test('handleAdminAction "rating" with no completed draw yet shows nothing to send', async () => {
+test('handleAdminAction "rating" opens the category hub showing enabled state by default', async () => {
   const userId = 30017;
   const chatId = -30017;
 
-  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  const { ctx, rawCtx, replies, replyButtonTexts } = fakeCtx('administrator', userId);
   withCallbackData(rawCtx, `admin:rating:${chatId}`);
   await handleAdminAction(ctx);
 
+  assert.equal(replies.some((r) => /Стан: увімкнено/.test(r)), true);
+  assert.equal(replyButtonTexts[0]?.some((label) => /Вимкнути/.test(label)), true);
+});
+
+test('handleAdminAction "rating_targets" with no completed draw yet shows nothing to send', async () => {
+  const userId = 30040;
+  const chatId = -30040;
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:rating_targets:${chatId}`);
+  await handleAdminAction(ctx);
+
   assert.equal(replies.some((r) => /нікого запитати/.test(r)), true);
+});
+
+test('a current admin tapping "rating_survey_toggle" flips the flag and logs it', async () => {
+  const userId = 30041;
+  const chatId = -30041;
+  assert.equal(isRatingSurveyEnabled(chatId), true); // starts at the default (enabled)
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:rating_survey_toggle:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(isRatingSurveyEnabled(chatId), false);
+  assert.equal(listAdminActions(chatId)[0]?.action, 'rating_toggle');
+  assert.equal(listAdminActions(chatId)[0]?.detail, 'off');
+  assert.equal(replies.some((r) => /Стан: вимкнено/.test(r)), true); // re-renders the hub with the new state
+});
+
+test('handleAdminAction refuses "rating_survey_toggle" for a demoted admin and leaves the flag untouched', async () => {
+  const userId = 30042;
+  const chatId = -30042;
+
+  const { ctx, rawCtx, alerts } = fakeCtx('member', userId);
+  withCallbackData(rawCtx, `admin:rating_survey_toggle:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
+  assert.equal(isRatingSurveyEnabled(chatId), true);
+  assert.deepEqual(listAdminActions(chatId), []);
 });
 
 test('handleAdminAction "rating_toggle" then "rating_send" DMs only the selected submitters', async () => {
@@ -343,7 +390,7 @@ test('handleAdminAction "rating_toggle" then "rating_send" DMs only the selected
   await handleAdminAction(drawCtx); // records the draw both submitters belong to
 
   const { ctx: openCtx, rawCtx: openRawCtx, replies } = fakeCtx('administrator', userId);
-  withCallbackData(openRawCtx, `admin:rating:${chatId}`);
+  withCallbackData(openRawCtx, `admin:rating_targets:${chatId}`);
   await handleAdminAction(openCtx);
   assert.equal(replies.some((r) => /Обери, кому надіслати/.test(r)), true);
 
@@ -402,7 +449,7 @@ test('a submitter blocked after the draw is neither DMed by "rating_all" nor off
   blockUserFromGroup(chatId, 2, 'olya', userId); // blocked only after this draw
 
   const { ctx: openCtx, rawCtx: openRawCtx, replyButtonTexts } = fakeCtx('administrator', userId);
-  withCallbackData(openRawCtx, `admin:rating:${chatId}`);
+  withCallbackData(openRawCtx, `admin:rating_targets:${chatId}`);
   await handleAdminAction(openCtx);
   assert.equal(replyButtonTexts[0]?.some((label) => /olya/.test(label)), false); // not offered as a toggle target
   assert.equal(replyButtonTexts[0]?.some((label) => /artem/.test(label)), true); // the still-unblocked one still is
@@ -434,6 +481,155 @@ test('handleAdminAction "rating_send" with a stale/empty selection shows an aler
   assert.deepEqual(listAdminActions(chatId).map((e) => e.action), ['draw']);
 });
 
+test('handleAdminAction "stats_top" shows nothing-yet text when the group has never had a winning draw', async () => {
+  const userId = 30023;
+  const chatId = -30023;
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:stats_top:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(replies.some((r) => /жодного розіграшу/.test(r)), true);
+  assert.deepEqual(listAdminActions(chatId), []); // pure navigation, never logged
+});
+
+test('handleAdminAction "stats_top" ranks winning places by win count, each as a clickable link', async () => {
+  const userId = 30024;
+  const chatId = -30024;
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/somewhere');
+
+  const { ctx: drawCtx, rawCtx: drawRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx);
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:stats_top:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(
+    replies.some((r) => r.includes('<a href="https://www.instagram.com/somewhere">somewhere</a> — 1×')),
+    true,
+  );
+});
+
+test('handleAdminAction "stats_top" gives two different generic-fallback places distinct, clickable hints', async () => {
+  const userId = 30027;
+  const chatId = -30027;
+  submitPlace(chatId, 1, 'artem', 'https://expz.menu/11111111-1111-1111-1111-1111111111aa');
+
+  const { ctx: drawCtx, rawCtx: drawRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx);
+
+  submitPlace(chatId, 2, 'olya', 'https://expz.menu/22222222-2222-2222-2222-2222222222bb');
+  const { ctx: drawCtx2, rawCtx: drawRawCtx2 } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx2, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx2);
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:stats_top:${chatId}`);
+  await handleAdminAction(ctx);
+
+  const text = replies.at(-1) ?? '';
+  assert.match(text, /<a href="https:\/\/expz\.menu\/11111111-1111-1111-1111-1111111111aa">заклад \(…11aa\)<\/a>/);
+  assert.match(text, /<a href="https:\/\/expz\.menu\/22222222-2222-2222-2222-2222222222bb">заклад \(…22bb\)<\/a>/);
+});
+
+test('handleAdminAction "stats_activity" lists top participants and top raters', async () => {
+  const userId = 30025;
+  const chatId = -30025;
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/somewhere');
+  submitPlace(chatId, 2, 'olya', 'https://www.instagram.com/elsewhere');
+
+  const { ctx: drawCtx, rawCtx: drawRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx);
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:stats_activity:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(replies.some((r) => /artem/.test(r) && /olya/.test(r)), true);
+  assert.equal(replies.some((r) => /Ще ніхто не оцінював/.test(r)), true); // nobody rated yet
+});
+
+test('handleAdminAction "select" shows the hub with 4 category buttons, not individual actions', async () => {
+  const userId = 30028;
+  const chatId = -30028;
+
+  const { ctx, rawCtx, replyButtonTexts } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:select:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.deepEqual(replyButtonTexts[0], ['🔄 Цикл тижня', '🚫 Учасники', '⭐ Опитування', '🧪 Експериментальні функції']);
+});
+
+test('handleAdminAction "cycle" shows pause/draw/reopen/clearweek plus a back button, and is refused for a demoted admin', async () => {
+  const userId = 30029;
+  const chatId = -30029;
+  lockSubmissions(chatId); // so "🔓 Відкрити прийом заявок" is present too
+
+  const { ctx, rawCtx, replyButtonTexts } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:cycle:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.deepEqual(replyButtonTexts[0], [
+    '⏸ Призупинити цикл',
+    '🔓 Відкрити прийом заявок',
+    '🔀 Провести жеребкування зараз',
+    '🧹 Скинути тиждень (без розіграшу)',
+    '‹ Назад',
+  ]);
+
+  const { ctx: demotedCtx, rawCtx: demotedRawCtx, alerts, replies } = fakeCtx('member', userId);
+  withCallbackData(demotedRawCtx, `admin:cycle:${chatId}`);
+  await handleAdminAction(demotedCtx);
+  assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
+  assert.equal(replies.length, 0);
+});
+
+test('handleAdminAction "experimental" shows a statistics entry and a back button', async () => {
+  const userId = 30030;
+  const chatId = -30030;
+
+  const { ctx, rawCtx, replies, replyButtonTexts } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:experimental:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(replies.some((r) => /Експериментальні функції/.test(r)), true);
+  assert.deepEqual(replyButtonTexts[0], [
+    '📊 Статистика',
+    '🩺 Діагностика планувальника',
+    '📜 Лог дій адмінів',
+    '‹ Назад',
+  ]);
+});
+
+test('handleAdminAction "stats" back button returns to the experimental hub, not the main hub', async () => {
+  const userId = 30031;
+  const chatId = -30031;
+
+  const { ctx, rawCtx, replyButtons } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:stats:${chatId}`);
+  await handleAdminAction(ctx);
+
+  const backButton = replyButtons[0]?.find((b) => b.text === '‹ Назад');
+  assert.equal(backButton?.callback_data, `admin:experimental:${chatId}`);
+});
+
+test('handleAdminAction refuses "stats"/"stats_top"/"stats_activity" for a demoted admin', async () => {
+  const chatId = -30026;
+
+  for (const data of [`admin:stats:${chatId}`, `admin:stats_top:${chatId}`, `admin:stats_activity:${chatId}`]) {
+    const { ctx, rawCtx, alerts, replies } = fakeCtx('member', 30026);
+    withCallbackData(rawCtx, data);
+    await handleAdminAction(ctx);
+
+    assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
+    assert.equal(replies.length, 0);
+  }
+});
+
 test('handleAdminAction refuses "rating_toggle"/"rating_all"/"rating_send" for a demoted admin', async () => {
   const chatId = -30021;
   submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/somewhere');
@@ -451,4 +647,107 @@ test('handleAdminAction refuses "rating_toggle"/"rating_all"/"rating_send" for a
     assert.equal(sentMessages.length, 0);
   }
   assert.deepEqual(listAdminActions(chatId).map((e) => e.action), ['draw']); // nothing rating-related logged
+});
+
+test('handleAdminAction "diagnostics" shows the "no tick yet" state and a back button to the experimental hub, refuses a demoted admin', async () => {
+  const userId = 30032;
+  const chatId = -30032;
+
+  const { ctx, rawCtx, replies, replyButtons } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:diagnostics:${chatId}`);
+  await handleAdminAction(ctx);
+
+  // This test file's process never calls scheduler.ts's runSchedulerTick, so getLastTickAt() is
+  // still null here — the neutral "not yet ticked" branch, not the 🔴 stuck one.
+  assert.equal(replies.some((r) => /ще не було жодного тіка/.test(r)), true);
+  assert.equal(replies.some((r) => /Розмір БД/.test(r)), true);
+  const backButton = replyButtons[0]?.find((b) => b.text === '‹ Назад');
+  assert.equal(backButton?.callback_data, `admin:experimental:${chatId}`);
+  assert.deepEqual(listAdminActions(chatId), []); // pure navigation, never logged
+
+  const { ctx: demotedCtx, rawCtx: demotedRawCtx, alerts, replies: demotedReplies } = fakeCtx('member', userId);
+  withCallbackData(demotedRawCtx, `admin:diagnostics:${chatId}`);
+  await handleAdminAction(demotedCtx);
+  assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
+  assert.equal(demotedReplies.length, 0);
+});
+
+test('handleAdminAction "auditlog" shows an empty-log message when the chat has no admin_actions yet', async () => {
+  const userId = 30033;
+  const chatId = -30033;
+
+  const { ctx, rawCtx, replies, replyButtons } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:auditlog:${chatId}:0`);
+  await handleAdminAction(ctx);
+
+  assert.equal(replies.some((r) => /Ще немає жодної дії в журналі/.test(r)), true);
+  assert.deepEqual(replyButtons[0]?.map((b) => b.text), ['‹ Назад']);
+});
+
+test('handleAdminAction "auditlog" lists logged actions newest-first with actor/label/detail', async () => {
+  const userId = 30034;
+  const chatId = -30034;
+
+  const { ctx: pauseCtx, rawCtx: pauseRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(pauseRawCtx, `admin:pause:${chatId}`);
+  await handleAdminAction(pauseCtx);
+
+  const { ctx: resumeCtx, rawCtx: resumeRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(resumeRawCtx, `admin:resume:${chatId}`);
+  await handleAdminAction(resumeCtx);
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:auditlog:${chatId}:0`);
+  await handleAdminAction(ctx);
+
+  const text = replies.at(-1) ?? '';
+  assert.match(text, /стор\. 1\/1/);
+  // Newest (resume) first, oldest (pause) last.
+  const resumeIndex = text.indexOf('Відновив цикл');
+  const pauseIndex = text.indexOf('Призупинив цикл');
+  assert.equal(resumeIndex >= 0 && pauseIndex >= 0 && resumeIndex < pauseIndex, true);
+});
+
+test('handleAdminAction "auditlog" paginates at 10 entries per page with working ‹ Новіші / Старіші › buttons', async () => {
+  const userId = 30035;
+  const chatId = -30035;
+
+  // 12 logged actions (pause/resume alternating) -> 2 pages, 10 + 2.
+  for (let i = 0; i < 12; i++) {
+    const action = i % 2 === 0 ? 'pause' : 'resume';
+    const { ctx, rawCtx } = fakeCtx('administrator', userId);
+    withCallbackData(rawCtx, `admin:${action}:${chatId}`);
+    await handleAdminAction(ctx);
+  }
+
+  const { ctx: page0Ctx, rawCtx: page0RawCtx, replies: page0Replies, replyButtons: page0Buttons } = fakeCtx(
+    'administrator',
+    userId,
+  );
+  withCallbackData(page0RawCtx, `admin:auditlog:${chatId}:0`);
+  await handleAdminAction(page0Ctx);
+  assert.match(page0Replies.at(-1) ?? '', /стор\. 1\/2/);
+  assert.deepEqual(page0Buttons[0]?.map((b) => b.text), ['Старіші ›', '‹ Назад']);
+
+  const nextButton = page0Buttons[0]?.find((b) => b.text === 'Старіші ›');
+  const { ctx: page1Ctx, rawCtx: page1RawCtx, replies: page1Replies, replyButtons: page1Buttons } = fakeCtx(
+    'administrator',
+    userId,
+  );
+  withCallbackData(page1RawCtx, nextButton!.callback_data);
+  await handleAdminAction(page1Ctx);
+  assert.match(page1Replies.at(-1) ?? '', /стор\. 2\/2/);
+  assert.deepEqual(page1Buttons[0]?.map((b) => b.text), ['‹ Новіші', '‹ Назад']);
+});
+
+test('handleAdminAction refuses "auditlog" for a demoted admin', async () => {
+  const userId = 30036;
+  const chatId = -30036;
+
+  const { ctx, rawCtx, alerts, replies } = fakeCtx('member', userId);
+  withCallbackData(rawCtx, `admin:auditlog:${chatId}:0`);
+  await handleAdminAction(ctx);
+
+  assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
+  assert.equal(replies.length, 0);
 });

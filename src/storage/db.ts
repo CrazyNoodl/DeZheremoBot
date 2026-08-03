@@ -15,3 +15,9 @@ if (DB_FILE !== ':memory:') {
 // Shared by store.ts and lockState.ts: both hold this week's live cycle state for a chat and are
 // reset together (resetWeek), so one connection/file for both rather than one each.
 export const db = new DatabaseSync(DB_FILE);
+
+// Exposed for storage/diagnostics.ts's DB-size reporting — the file path itself, not the
+// connection, since that's all a size check needs.
+export function getStateDbPath(): string {
+  return DB_FILE;
+}

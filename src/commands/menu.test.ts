@@ -18,6 +18,12 @@ import {
 import { getAwaitingChatId } from '../storage/pendingState.js';
 import { setMenuMessage } from '../storage/menuMessages.js';
 
+// Mirrors menu.ts's own DECLINE_RETRACTION_POOL — the wording is randomized, so tests assert that
+// the retraction reads as *some* member of the pool rather than one fixed phrase.
+function isDeclineRetractionAnnouncement(text: string): boolean {
+  return /цього тижня не йде \(варіант знято: /.test(text) || /цього тижня пропускає — і забирає варіант: /.test(text);
+}
+
 function fakeGroupCtx(status: string, chatId: number, userId: number) {
   const sentMessages: Array<{ chatId: number; text: string }> = [];
   const alerts: Array<{ text?: string; show_alert?: boolean }> = [];
@@ -190,7 +196,7 @@ test('handleDeclineAction records a decline and shows it on the menu card, silen
   await handleDeclineAction(ctx);
 
   assert.equal(getAllSubmissions(groupChatId)[0]?.status, 'declined');
-  assert.equal(replies.some((r) => /не йдеш/.test(r)), true);
+  assert.equal(replies.some((r) => /тебе не буде/.test(r)), true);
   assert.equal(sentMessages.length, 0); // nothing to retract, so the group hears nothing
 });
 
@@ -206,7 +212,7 @@ test('handleDeclineAction announces to the group when it retracts an already-sub
   assert.equal(getAllSubmissions(groupChatId)[0]?.status, 'declined');
   assert.equal(sentMessages.length, 1);
   assert.equal(sentMessages[0].chatId, groupChatId);
-  assert.match(sentMessages[0].text, /не йде/);
+  assert.ok(isDeclineRetractionAnnouncement(sentMessages[0].text));
   assert.match(sentMessages[0].text, /somewhere/);
 });
 
@@ -321,7 +327,7 @@ test('handleGroupDeclineAction announces to the group when it retracts an alread
   assert.equal(getAllSubmissions(groupChatId)[0]?.status, 'declined');
   assert.equal(sentMessages.length, 1);
   assert.equal(sentMessages[0].chatId, groupChatId);
-  assert.match(sentMessages[0].text, /не йде/);
+  assert.ok(isDeclineRetractionAnnouncement(sentMessages[0].text));
   assert.match(sentMessages[0].text, /somewhere/);
 });
 

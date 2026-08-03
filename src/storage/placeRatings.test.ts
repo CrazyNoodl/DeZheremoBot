@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { addOrUpdateRating, markAsAbsent } from './placeRatings.js';
+import { addOrUpdateRating, getTopRaters, markAsAbsent } from './placeRatings.js';
 import { db, recordDraw } from './history.js';
 
 function drawIdFor(chatId: number): number {
@@ -74,4 +74,47 @@ test('addOrUpdateRating overwrites a previous "absent" mark back to a real ratin
 
   const row = db.prepare('SELECT stars FROM place_ratings WHERE draw_id = ? AND user_id = ?').get(drawId, 42);
   assert.equal(row?.stars, 5);
+});
+
+function drawWithTwoSubmitters(chatId: number): number {
+  recordDraw({
+    chatId,
+    drawnAt: 1_700_000_000_000,
+    winner: { userId: 1, username: 'artem', place: 'Дежерьома' },
+    submissions: [
+      { userId: 1, username: 'artem', place: 'Дежерьома' },
+      { userId: 2, username: 'olya', place: 'Пузата хата' },
+    ],
+  });
+  return db.prepare('SELECT id FROM weekly_draws WHERE chat_id = ? ORDER BY id DESC LIMIT 1').get(chatId)!.id as number;
+}
+
+test('getTopRaters ranks submitters by how many star ratings they have given, most first', () => {
+  const chatId = -6007;
+  const drawA = drawWithTwoSubmitters(chatId);
+  const drawB = drawWithTwoSubmitters(chatId);
+  addOrUpdateRating(drawA, 1, 5);
+  addOrUpdateRating(drawB, 1, 4);
+  addOrUpdateRating(drawA, 2, 3);
+
+  assert.deepEqual(
+    getTopRaters(chatId).map((r) => ({ ...r })),
+    [
+      { userId: 1, username: 'artem', ratings: 2 },
+      { userId: 2, username: 'olya', ratings: 1 },
+    ],
+  );
+});
+
+test('getTopRaters excludes "🙅 Мене не було" (NULL-stars) taps and is isolated per chat', () => {
+  const chatId = -6008;
+  const drawId = drawWithTwoSubmitters(chatId);
+  addOrUpdateRating(drawId, 1, 5);
+  markAsAbsent(drawId, 2);
+
+  assert.deepEqual(
+    getTopRaters(chatId).map((r) => ({ ...r })),
+    [{ userId: 1, username: 'artem', ratings: 1 }],
+  );
+  assert.deepEqual(getTopRaters(-6009), []);
 });

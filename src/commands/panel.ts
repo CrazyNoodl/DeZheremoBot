@@ -27,11 +27,12 @@ export function createPanel(ttlMs: number, logLabel: string) {
     userId: number,
     text: string,
     keyboard: ReturnType<typeof Markup.inlineKeyboard>,
+    extra?: { parse_mode?: 'HTML'; link_preview_options?: { is_disabled: boolean } },
   ): Promise<void> {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
 
-    const sent = await ctx.reply(text, keyboard);
+    const sent = await ctx.reply(text, { ...keyboard, ...extra });
     track(ctx, userId, chatId, sent.message_id);
   }
 
@@ -40,12 +41,13 @@ export function createPanel(ttlMs: number, logLabel: string) {
     userId: number,
     text: string,
     keyboard: ReturnType<typeof Markup.inlineKeyboard> = Markup.inlineKeyboard([]),
+    extra?: { parse_mode?: 'HTML'; link_preview_options?: { is_disabled: boolean } },
   ): Promise<void> {
     const ref = store.get(userId);
 
     if (ref) {
       try {
-        await ctx.telegram.editMessageText(ref.chatId, ref.messageId, undefined, text, keyboard);
+        await ctx.telegram.editMessageText(ref.chatId, ref.messageId, undefined, text, { ...keyboard, ...extra });
         return;
       } catch (err) {
         // Telegram rejects an edit whose text+keyboard exactly match the current message —
@@ -58,7 +60,7 @@ export function createPanel(ttlMs: number, logLabel: string) {
       }
     }
 
-    await send(ctx, userId, text, keyboard);
+    await send(ctx, userId, text, keyboard, extra);
   }
 
   return { track, send, update };

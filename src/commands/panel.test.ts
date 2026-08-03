@@ -7,14 +7,17 @@ const keyboard = Markup.inlineKeyboard([]);
 
 function fakeCtx(chatId: number | undefined) {
   const replies: string[] = [];
+  const replyExtras: unknown[] = [];
   const edits: { chatId: number; messageId: number; text: string }[] = [];
+  const editExtras: unknown[] = [];
   const deletes: { chatId: number; messageId: number }[] = [];
   let editImpl: () => Promise<unknown> = async () => ({});
 
   const ctx = {
     chat: chatId === undefined ? undefined : { id: chatId },
-    reply: async (text: string) => {
+    reply: async (text: string, extra?: unknown) => {
       replies.push(text);
+      replyExtras.push(extra);
       return { message_id: replies.length };
     },
     telegram: {
@@ -23,8 +26,10 @@ function fakeCtx(chatId: number | undefined) {
         messageId: number,
         _inlineMessageId: undefined,
         text: string,
+        extra?: unknown,
       ) => {
         edits.push({ chatId: editChatId, messageId, text });
+        editExtras.push(extra);
         return editImpl();
       },
       deleteMessage: async (deleteChatId: number, messageId: number) => {
@@ -36,7 +41,9 @@ function fakeCtx(chatId: number | undefined) {
   return {
     ctx: ctx as unknown as Context,
     replies,
+    replyExtras,
     edits,
+    editExtras,
     deletes,
     setEditImpl: (fn: () => Promise<unknown>) => {
       editImpl = fn;
@@ -162,6 +169,37 @@ test('track TTL is a no-op if superseded by a newer panel message for the same u
   // both TTLs fire at the same tick, but only the second (still-tracked) message gets deleted
   assert.equal(deletes.length, 1);
   assert.equal(deletes[0].messageId, 2);
+});
+
+test('send forwards an optional extra (e.g. parse_mode) alongside the keyboard to ctx.reply', async () => {
+  const panel = createPanel(1000, 'test');
+  const userId = 30009;
+  const { ctx, replyExtras } = fakeCtx(-30009);
+
+  await panel.send(ctx, userId, 'hello', keyboard, { parse_mode: 'HTML' });
+
+  assert.deepEqual(replyExtras[0], { ...keyboard, parse_mode: 'HTML' });
+});
+
+test('update forwards an optional extra to editMessageText on the in-place edit path', async () => {
+  const panel = createPanel(1000, 'test');
+  const userId = 30010;
+  const { ctx, editExtras } = fakeCtx(-30010);
+
+  await panel.send(ctx, userId, 'initial', keyboard);
+  await panel.update(ctx, userId, 'edited', keyboard, { parse_mode: 'HTML' });
+
+  assert.deepEqual(editExtras[0], { ...keyboard, parse_mode: 'HTML' });
+});
+
+test('update forwards an optional extra through to the fallback send when there is nothing tracked yet', async () => {
+  const panel = createPanel(1000, 'test');
+  const userId = 30011;
+  const { ctx, replyExtras } = fakeCtx(-30011);
+
+  await panel.update(ctx, userId, 'first time', keyboard, { parse_mode: 'HTML' });
+
+  assert.deepEqual(replyExtras[0], { ...keyboard, parse_mode: 'HTML' });
 });
 
 test('safeAnswerCbQuery calls through to ctx.answerCbQuery with the given text/extra', async () => {
