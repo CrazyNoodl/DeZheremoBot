@@ -7,6 +7,7 @@ import { getLastTickAt, sendRatingSurvey, SCHEDULER_STUCK_THRESHOLD_MS } from '.
 import {
   blockUserFromGroup,
   getAllSubmissions,
+  getUserSubmission,
   isGroupPaused,
   isRepeatWinner,
   isSubmissionLocked,
@@ -23,7 +24,7 @@ import { getRatingSurveyContext, isRatingSurveyEnabled, setRatingSurveyEnabled }
 import { listAdminActions, logAdminAction, type AdminAction, type AdminActionRecord } from '../storage/auditLog.js';
 import { markFired } from '../storage/firedEvents.js';
 import { formatBytes, getStorageDiagnostics } from '../storage/diagnostics.js';
-import { getTopParticipants, getTopWinningPlaces } from '../storage/history.js';
+import { getHistoricalSubmitters, getTopParticipants, getTopWinningPlaces } from '../storage/history.js';
 import { getTopRaters } from '../storage/placeRatings.js';
 import { clearRatingSelection, getRatingSelection, setRatingSelection } from '../storage/ratingSelectionState.js';
 import { sendToChat } from '../messaging/telegramBroadcast.js';
@@ -181,8 +182,35 @@ function auditActorLabel(record: AdminActionRecord): string {
   return record.actorName ?? `id${record.actorUserId}`;
 }
 
+// `target`/`targets`/`winner` detail values are raw Telegram user ids captured at write-time (see
+// the logAdminAction call sites in this file) — there's no username column on admin_actions itself,
+// so it's resolved at read-time instead, best-effort, from whichever storage still has that user's
+// name: this week's live submission, a currently-blocked row, or a past week's submissions_history.
+// None of those is guaranteed (e.g. an unblocked user who's never submitted again shows only their
+// id), the same "best-effort, id fallback" shape displayName()/getNonSubmittersInfo already use
+// elsewhere for exactly this Bot-API limitation (no way to look up a user by bare id).
+function resolveUserDisplayName(chatId: number, userId: number): string {
+  const current = getUserSubmission(chatId, userId);
+  if (current) return displayName(current.username, userId);
+  const blocked = listBlockedUsersInGroup(chatId).find((b) => b.userId === userId);
+  if (blocked) return displayName(blocked.username, userId);
+  const historical = getHistoricalSubmitters(chatId).find((h) => h.userId === userId);
+  if (historical) return displayName(historical.username, userId);
+  return displayName(undefined, userId);
+}
+
+function renderAuditDetail(chatId: number, detail: string | null): string {
+  if (!detail) return '';
+  const single = detail.match(/^(target|winner):(\d+)$/);
+  if (single) return resolveUserDisplayName(chatId, Number(single[2]));
+  const multi = detail.match(/^targets:([\d,]+)$/);
+  if (multi) return multi[1].split(',').map((id) => resolveUserDisplayName(chatId, Number(id))).join(', ');
+  return detail;
+}
+
 function buildAuditLogRow(record: AdminActionRecord): string {
-  const detailSuffix = record.detail ? ` (${record.detail})` : '';
+  const renderedDetail = renderAuditDetail(record.chatId, record.detail);
+  const detailSuffix = renderedDetail ? ` (${renderedDetail})` : '';
   return `${formatKyivDateTime(record.createdAt)} — ${auditActorLabel(record)}: ${ADMIN_ACTION_LABELS[record.action]}${detailSuffix}`;
 }
 

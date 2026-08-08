@@ -708,6 +708,42 @@ test('handleAdminAction "auditlog" lists logged actions newest-first with actor/
   assert.equal(resumeIndex >= 0 && pauseIndex >= 0 && resumeIndex < pauseIndex, true);
 });
 
+test('handleAdminAction "auditlog" resolves a target/targets id to @username instead of showing the raw id', async () => {
+  const userId = 30044;
+  const chatId = -30044;
+  const targetUserId = 1;
+  submitPlace(chatId, targetUserId, 'artem', 'https://www.instagram.com/somewhere');
+
+  const { ctx: blockCtx, rawCtx: blockRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(blockRawCtx, `admin:block:${chatId}:${targetUserId}`);
+  await handleAdminAction(blockCtx);
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:auditlog:${chatId}:0`);
+  await handleAdminAction(ctx);
+
+  const text = replies.at(-1) ?? '';
+  assert.match(text, /\(@artem\)/);
+  assert.doesNotMatch(text, new RegExp(`target:${targetUserId}`));
+});
+
+test('handleAdminAction "auditlog" falls back to a bare id when no username can be resolved', async () => {
+  const userId = 30045;
+  const chatId = -30045;
+  const targetUserId = 999999;
+
+  const { ctx: blockCtx, rawCtx: blockRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(blockRawCtx, `admin:block:${chatId}:${targetUserId}`);
+  await handleAdminAction(blockCtx);
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:auditlog:${chatId}:0`);
+  await handleAdminAction(ctx);
+
+  const text = replies.at(-1) ?? '';
+  assert.match(text, new RegExp(`\\(id${targetUserId}\\)`));
+});
+
 test('handleAdminAction "auditlog" paginates at 10 entries per page with working ‹ Новіші / Старіші › buttons', async () => {
   const userId = 30035;
   const chatId = -30035;
