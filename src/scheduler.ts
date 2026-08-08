@@ -34,6 +34,10 @@ export function getLastTickAt(): number | null {
   return lastTickAt;
 }
 
+// Shared by the /admin diagnostics screen's passive red/green indicator and this file's own
+// active stuck-tick alert below, so the two never drift into disagreeing about what "stuck" means.
+export const SCHEDULER_STUCK_THRESHOLD_MS = 2 * 60 * 1000;
+
 // Rotated so the same weekly message doesn't read as identically robotic every time.
 const REMINDER_EMOJI = ['🍽', '🍕', '🥗', '🍜'] as const;
 
@@ -193,6 +197,64 @@ export function runSchedulerTick(bot: Telegraf, now: { weekday: number; time: st
   }
 }
 
+// Sentry Crons: a check-in per tick lets Sentry itself notice a tick that stops arriving
+// altogether (the process died, the event loop is fully wedged) or one that starts but never
+// finishes — neither of which the in-process stuck-tick alert below can detect on its own, since
+// that alert depends on some other timer in the same process still running to notice.
+const SCHEDULER_MONITOR_SLUG = 'dezheremo-scheduler-tick';
+const SCHEDULER_MONITOR_CONFIG = {
+  schedule: { type: 'interval', value: 1, unit: 'minute' },
+  checkinMargin: 2,
+  maxRuntime: 1,
+  failureIssueThreshold: 3,
+  recoveryThreshold: 1,
+} as const;
+
+// Independent of the per-minute cron tick itself, checked on its own timer specifically so it can
+// still fire and alert even if the tick's own callback is the thing that's hung (as long as the
+// event loop isn't fully frozen — a total freeze needs the Sentry Crons check-in above instead,
+// which is reported from outside this process). Gated on an optional env var, the same
+// optional-unless-configured pattern SENTRY_DSN already uses: unset, this is a silent no-op.
+// `sent` latches once per stall and only re-arms after `lastTickAt` recovers, so a stall that
+// spans many checks pings the admin once, not every interval.
+const STUCK_ALERT_CHECK_INTERVAL_MS = 30 * 1000;
+let stuckAlertSent = false;
+
+export function checkStuckTick(telegram: Telegram, nowMs: number): void {
+  const alertChatId = process.env.DEZHEREMO_ALERT_CHAT_ID;
+  if (!alertChatId || lastTickAt === null) return;
+
+  const staleForMs = nowMs - lastTickAt;
+  if (staleForMs <= SCHEDULER_STUCK_THRESHOLD_MS) {
+    stuckAlertSent = false;
+    return;
+  }
+  if (stuckAlertSent) return;
+
+  stuckAlertSent = true;
+  sendDirectMessage(
+    telegram,
+    Number(alertChatId),
+    `🔴 Планувальник не робив тік ${Math.round(staleForMs / 1000)} сек — перевір процес бота.`,
+  );
+}
+
+// Factored out of startScheduler's cron.schedule(...) callback for the same reason
+// runSchedulerTick itself was: a bare arrow function inline there can't be called directly by a
+// test. Previously runSchedulerTick was called with no error handling at all — a synchronous
+// throw from anywhere in its per-chat loop (a real DB error, not a rejected fire-and-forget send,
+// which is already caught independently inside telegramBroadcast.ts) would have propagated out of
+// node-cron's callback uncaught.
+export function runTickSafely(bot: Telegraf): void {
+  try {
+    Sentry.withMonitor(SCHEDULER_MONITOR_SLUG, () => runSchedulerTick(bot, getKyivNow()), SCHEDULER_MONITOR_CONFIG);
+  } catch (err) {
+    console.error('[scheduler] tick threw:', err);
+    Sentry.captureException(err);
+  }
+}
+
 export function startScheduler(bot: Telegraf): void {
-  cron.schedule('* * * * *', () => runSchedulerTick(bot, getKyivNow()));
+  cron.schedule('* * * * *', () => runTickSafely(bot));
+  setInterval(() => checkStuckTick(bot.telegram, Date.now()), STUCK_ALERT_CHECK_INTERVAL_MS);
 }

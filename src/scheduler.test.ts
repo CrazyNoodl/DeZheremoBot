@@ -10,7 +10,8 @@ import type { Telegraf } from 'telegraf';
 // DEZHEREMO_DATA_DIR once at import time — same isolation approach as commands/schedule.test.ts.
 process.env.DEZHEREMO_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'dzb-scheduler-'));
 
-const { getLastTickAt, runSchedulerTick } = await import('./scheduler.js');
+const { checkStuckTick, getLastTickAt, runSchedulerTick, runTickSafely, SCHEDULER_STUCK_THRESHOLD_MS } =
+  await import('./scheduler.js');
 const { addGroupChat } = await import('./storage/groupChats.js');
 const { setGroupSchedule } = await import('./storage/groupSchedules.js');
 const { hasFiredToday } = await import('./storage/firedEvents.js');
@@ -547,4 +548,71 @@ test('a paused chat still marks reminder/lock/draw fired for today but skips the
   assert.equal(messagesFor(sentMessages, chatId).length, 0); // nothing actually sent
   assert.equal(isSubmissionLocked(chatId), false); // lock was skipped
   assert.equal(getAllSubmissions(chatId).length, 1); // draw/reset was skipped, submission survives
+});
+
+test('runTickSafely runs a normal tick without throwing (Sentry.withMonitor no-ops with no DSN configured)', () => {
+  const { bot } = fakeBot();
+  const before = getLastTickAt();
+
+  runTickSafely(bot);
+
+  assert.notEqual(getLastTickAt(), before); // proves the real tick underneath still ran
+});
+
+// checkStuckTick is on its own independent timer from the per-minute cron tick specifically so it
+// can flag a stall even if the tick's own callback is what's hung — see scheduler.ts. Its opt-in
+// gate (DEZHEREMO_ALERT_CHAT_ID) mirrors SENTRY_DSN's optional pattern, so these tests set/clear
+// the env var themselves rather than relying on it being globally configured for the test run.
+test('checkStuckTick does nothing when DEZHEREMO_ALERT_CHAT_ID is unset, even long past the stuck threshold', () => {
+  delete process.env.DEZHEREMO_ALERT_CHAT_ID;
+  const { bot } = fakeBot();
+  runSchedulerTick(bot, { weekday: 1, time: '00:00', date: '2024-01-01' }); // pins lastTickAt to "now"
+
+  let called = false;
+  const telegram = {
+    sendMessage: async () => {
+      called = true;
+      return { message_id: 1 };
+    },
+  };
+
+  checkStuckTick(telegram as unknown as Parameters<typeof checkStuckTick>[0], getLastTickAt()! + SCHEDULER_STUCK_THRESHOLD_MS + 60_000);
+
+  assert.equal(called, false);
+});
+
+test('checkStuckTick alerts once per stall and re-arms after the tick recovers', () => {
+  process.env.DEZHEREMO_ALERT_CHAT_ID = '424242';
+  try {
+    const { bot } = fakeBot();
+    runSchedulerTick(bot, { weekday: 1, time: '00:00', date: '2024-01-01' }); // pins lastTickAt to "now"
+    const pinnedAt = getLastTickAt()!;
+
+    const sent: Array<{ chatId: number; text: string }> = [];
+    const telegram = {
+      sendMessage: async (chatId: number, text: string) => {
+        sent.push({ chatId, text });
+        return { message_id: 1 };
+      },
+    } as unknown as Parameters<typeof checkStuckTick>[0];
+
+    const staleNow = pinnedAt + SCHEDULER_STUCK_THRESHOLD_MS + 60_000;
+    checkStuckTick(telegram, staleNow);
+    checkStuckTick(telegram, staleNow + 1000); // still stale — must not alert a second time
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].chatId, 424242);
+    assert.match(sent[0].text, /Планувальник/);
+
+    // A fresh tick moves lastTickAt forward — "now" reads as fresh again, and the latch re-arms.
+    runSchedulerTick(bot, { weekday: 1, time: '00:01', date: '2024-01-01' });
+    checkStuckTick(telegram, getLastTickAt()!);
+    assert.equal(sent.length, 1); // recovering itself sends nothing
+
+    // Stalling again after a recovery must alert again, not stay silenced by the earlier latch.
+    checkStuckTick(telegram, getLastTickAt()! + SCHEDULER_STUCK_THRESHOLD_MS + 60_000);
+    assert.equal(sent.length, 2);
+  } finally {
+    delete process.env.DEZHEREMO_ALERT_CHAT_ID;
+  }
 });

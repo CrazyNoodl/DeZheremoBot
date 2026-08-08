@@ -3,7 +3,7 @@ import { buildDrawAnnouncement } from '../messaging/announcements.js';
 import { placeLabel, placeLinkWithHint } from '../utils/htmlFormat.js';
 import { handleAdminEntryCommand, isGroupAdmin, showGatedMenu } from './access.js';
 import { formatKyivDateTime, getKyivNow } from '../utils/kyivTime.js';
-import { getLastTickAt, sendRatingSurvey } from '../scheduler.js';
+import { getLastTickAt, sendRatingSurvey, SCHEDULER_STUCK_THRESHOLD_MS } from '../scheduler.js';
 import {
   blockUserFromGroup,
   getAllSubmissions,
@@ -122,7 +122,9 @@ async function renderExperimentalMenu(ctx: Context, userId: number, chatId: numb
 // Content is global (one scheduler tick loop and one pair of DB files for the whole bot), not
 // scoped to whichever group's /admin this was opened from — see CLAUDE.md's "Admin statistics"
 // sibling reasoning for why a read-only screen like this doesn't need per-chat data.
-const SCHEDULER_STUCK_THRESHOLD_MS = 2 * 60 * 1000;
+// SCHEDULER_STUCK_THRESHOLD_MS itself lives in scheduler.ts now, shared with its own active
+// stuck-tick alert, so the passive indicator here and that alert can't drift into disagreeing
+// about what "stuck" means.
 
 function buildDiagnosticsText(): string {
   const lastTickAt = getLastTickAt();

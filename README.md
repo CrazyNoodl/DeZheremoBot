@@ -41,6 +41,14 @@ Telegram-бот для групового чату, який допомагає 
   розкладу кожної групи
 - `node:sqlite` (вбудований у Node.js) — зберігання поточного стану тижня та історії
   розіграшів, без зовнішньої БД
+- [`@sentry/node`](https://docs.sentry.io/platforms/javascript/guides/node/) (опційно, лише
+  якщо задано `SENTRY_DSN`) — трекінг помилок у продакшені, включно з Sentry Crons-моніторингом
+  самого щохвилинного тіка
+
+Якщо задано `DEZHEREMO_ALERT_CHAT_ID` (опційно, id Telegram-чату з ботом, куди слати
+сповіщення), бот сам напише туди, якщо щохвилинний тік не спрацьовував понад 2 хвилини —
+на додачу до Sentry Crons, а не замість нього: цей алерт ловить "тік завис", Sentry
+Crons — ще й "процес взагалі впав".
 
 ## Запуск локально
 
@@ -75,6 +83,7 @@ persistent volume під `data/` (там зберігаються `groupChats.js
 fly launch          # перший запуск — fly.toml вже є, можна пропустити перезапис
 fly volumes create dezheremobot_data --region fra --size 1
 fly secrets set BOT_TOKEN=<продакшн-токен>
+fly secrets set DEZHEREMO_ALERT_CHAT_ID=<ваш telegram user id>   # опційно
 fly deploy
 ```
 
