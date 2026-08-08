@@ -1,0 +1,45 @@
+name: Nightly data backup
+
+# Snapshots the live Fly volume's SQLite files (via a consistent VACUUM INTO copy — see
+# src/scripts/backup.ts — never a raw file copy, which could grab the file mid-write) plus the two
+# JSON lookup tables, and stores them as a GitHub Actions artifact. This is a second, off-Fly layer
+# on top of Fly's own automatic volume snapshots: a volume snapshot protects against losing the
+# volume itself, this protects against losing the whole Fly app/org, or just wanting a copy without
+# going through `fly volumes snapshots restore`.
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # 02:00 UTC nightly
+  workflow_dispatch: {} # manual test-run
+
+concurrency: backup-group
+
+jobs:
+  backup:
+    name: Backup
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+    steps:
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Write a fresh consistent snapshot of both SQLite files on the running machine
+        run: flyctl ssh console -a dezheremobot -C "npm run backup"
+
+      - name: Pull the SQLite snapshots and JSON lookup tables off the machine
+        run: |
+          flyctl ssh sftp get /app/data/backup/state.db state.db -a dezheremobot
+          flyctl ssh sftp get /app/data/backup/history.db history.db -a dezheremobot
+          flyctl ssh sftp get /app/data/groupChats.json groupChats.json -a dezheremobot || echo "groupChats.json not present yet — skipping"
+          flyctl ssh sftp get /app/data/groupSchedules.json groupSchedules.json -a dezheremobot || echo "groupSchedules.json not present yet (no group has customized its schedule) — skipping"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dezheremo-backup-${{ github.run_number }}
+          path: |
+            state.db
+            history.db
+            groupChats.json
+            groupSchedules.json
+          retention-days: 30
+          if-no-files-found: warn
