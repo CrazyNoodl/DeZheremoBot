@@ -15,7 +15,7 @@ const { getSchedule, updateReminderSchedule } = await import('../services/schedu
 const { isGroupPaused, pauseGroup } = await import('../services/submissionService.js');
 const { DEFAULT_SCHEDULE } = await import('../storage/groupSchedules.js');
 const { hasFiredToday } = await import('../storage/firedEvents.js');
-const { getKyivNow } = await import('../kyivTime.js');
+const { getKyivNow } = await import('../utils/kyivTime.js');
 const { listAdminActions } = await import('../storage/auditLog.js');
 const { setRatingSurveyEnabled } = await import('../services/ratingService.js');
 

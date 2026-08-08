@@ -1,6 +1,6 @@
 import { Markup, type Context } from 'telegraf';
-import { pickRandom } from '../announcements.js';
-import { escapeHtml, placeLabel, placeLink } from '../htmlFormat.js';
+import { pickRandom } from '../messaging/announcements.js';
+import { escapeHtml, placeLabel, placeLink } from '../utils/htmlFormat.js';
 import { isChatMember } from './access.js';
 import { PLACE_LINK_FORMAT_HINT, promptForPlace } from './add.js';
 import { DECLINE_GROUP_ACTION } from './keyboard.js';
@@ -18,7 +18,7 @@ import {
   type SubmitResult,
 } from '../services/submissionService.js';
 import { getMenuMessage } from '../storage/menuMessages.js';
-import { sendToChat } from '../telegramBroadcast.js';
+import { sendToChat } from '../messaging/telegramBroadcast.js';
 
 export { SUBMIT_ACTION, DECLINE_ACTION, DECLINE_GROUP_ACTION };
 

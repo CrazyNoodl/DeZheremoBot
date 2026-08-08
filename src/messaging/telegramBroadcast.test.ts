@@ -12,7 +12,7 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dzb-broadcast-'));
 process.env.DEZHEREMO_DATA_DIR = dataDir;
 
 const { broadcast, sendDirectMessage, sendToChat } = await import('./telegramBroadcast.js');
-const { addGroupChat, listGroupChats } = await import('./storage/groupChats.js');
+const { addGroupChat, listGroupChats } = await import('../storage/groupChats.js');
 
 function fakeTelegram(sendMessage: Telegram['sendMessage']): { telegram: Telegram; deletes: Array<{ chatId: number; messageId: number }> } {
   const deletes: Array<{ chatId: number; messageId: number }> = [];

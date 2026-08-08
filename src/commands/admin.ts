@@ -1,8 +1,8 @@
 import { Markup, type Context } from 'telegraf';
-import { buildDrawAnnouncement } from '../announcements.js';
-import { placeLabel, placeLinkWithHint } from '../htmlFormat.js';
+import { buildDrawAnnouncement } from '../messaging/announcements.js';
+import { placeLabel, placeLinkWithHint } from '../utils/htmlFormat.js';
 import { handleAdminEntryCommand, isGroupAdmin, showGatedMenu } from './access.js';
-import { formatKyivDateTime, getKyivNow } from '../kyivTime.js';
+import { formatKyivDateTime, getKyivNow } from '../utils/kyivTime.js';
 import { getLastTickAt, sendRatingSurvey } from '../scheduler.js';
 import {
   blockUserFromGroup,
@@ -26,7 +26,7 @@ import { formatBytes, getStorageDiagnostics } from '../storage/diagnostics.js';
 import { getTopParticipants, getTopWinningPlaces } from '../storage/history.js';
 import { getTopRaters } from '../storage/placeRatings.js';
 import { clearRatingSelection, getRatingSelection, setRatingSelection } from '../storage/ratingSelectionState.js';
-import { sendToChat } from '../telegramBroadcast.js';
+import { sendToChat } from '../messaging/telegramBroadcast.js';
 import { createPanel, safeAnswerCbQuery } from './panel.js';
 
 // Same 48h reasoning as MENU_MESSAGE_TTL_MS in menuMessage.ts / SCHEDULE_PANEL_TTL_MS in schedule.ts.

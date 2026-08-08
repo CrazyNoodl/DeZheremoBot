@@ -1,7 +1,7 @@
-import { escapeHtml, placeLink } from './htmlFormat.js';
-import { getKyivNow } from './kyivTime.js';
-import type { HistoricalSubmitter } from './storage/history.js';
-import type { Submission } from './storage/store.js';
+import { escapeHtml, placeLink } from '../utils/htmlFormat.js';
+import { getKyivNow } from '../utils/kyivTime.js';
+import type { HistoricalSubmitter } from '../storage/history.js';
+import type { Submission } from '../storage/store.js';
 
 // Shared by scheduler.ts's own draw branch and admin.ts's "force draw now" action, so a manual
 // draw's group announcement stays byte-identical to a scheduled one (see "Admin controls" in

@@ -1,11 +1,11 @@
 import cron from 'node-cron';
 import * as Sentry from '@sentry/node';
 import type { Telegraf, Telegram } from 'telegraf';
-import { buildDrawAnnouncement, buildFinalReminderExtra, pickRandom, pickRandomEmoji } from './announcements.js';
+import { buildDrawAnnouncement, buildFinalReminderExtra, pickRandom, pickRandomEmoji } from './messaging/announcements.js';
 import { buildGroupMenu } from './commands/keyboard.js';
 import { buildRatingKeyboard } from './commands/rating.js';
-import { placeLink } from './htmlFormat.js';
-import { getKyivNow } from './kyivTime.js';
+import { placeLink } from './utils/htmlFormat.js';
+import { getKyivNow } from './utils/kyivTime.js';
 import { getRatingSurveyContext, isRatingSurveyEnabled } from './services/ratingService.js';
 import { getNonSubmittersInfo } from './services/reminderService.js';
 import { getFinalReminderWeekday, getFirstReminderWeekday } from './services/scheduleService.js';
@@ -20,7 +20,7 @@ import {
 import { hasFiredToday, markFired } from './storage/firedEvents.js';
 import { listGroupChats } from './storage/groupChats.js';
 import { getGroupSchedule, type GroupScheduleConfig } from './storage/groupSchedules.js';
-import { sendDirectMessage, sendToChat } from './telegramBroadcast.js';
+import { sendDirectMessage, sendToChat } from './messaging/telegramBroadcast.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

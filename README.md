@@ -86,10 +86,11 @@ fly deploy
 src/
   bot.ts            точка входу — реєструє хендлери, запускає бота й планувальник
   scheduler.ts       щохвилинна перевірка розкладу кожної групи
-  telegramBroadcast.ts  розсилка повідомлень у групи
   commands/          Telegraf-хендлери (тонкий шар, без бізнес-логіки)
   services/          бізнес-логіка: блокування, випадковий вибір, валідація розкладу
   storage/           доступ до даних: JSON-файли, SQLite, in-memory стан UI
+  messaging/         announcements.ts, telegramBroadcast.ts — побудова й розсилка повідомлень у групи
+  utils/             kyivTime.ts, htmlFormat.ts — дрібні хелпери без бізнес-логіки
 data/                 groupChats.json, groupSchedules.json, state.db, history.db (гітигноряться)
 ```
 

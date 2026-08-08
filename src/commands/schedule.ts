@@ -1,5 +1,5 @@
 import { Markup, type Context } from 'telegraf';
-import { getKyivNow } from '../kyivTime.js';
+import { getKyivNow } from '../utils/kyivTime.js';
 import { sendTaggedReminder } from '../scheduler.js';
 import { isRatingSurveyEnabled } from '../services/ratingService.js';
 import {

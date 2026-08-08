@@ -1,7 +1,7 @@
 import * as Sentry from '@sentry/node';
 import { Markup, TelegramError, type Context } from 'telegraf';
-import { pickRandom } from '../announcements.js';
-import { escapeHtml, placeLink } from '../htmlFormat.js';
+import { pickRandom } from '../messaging/announcements.js';
+import { escapeHtml, placeLink } from '../utils/htmlFormat.js';
 import { getSchedule } from '../services/scheduleService.js';
 import { getUserSubmission } from '../services/submissionService.js';
 import { getGroupChatTitle } from '../storage/groupChats.js';

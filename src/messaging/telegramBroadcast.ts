@@ -1,6 +1,6 @@
 import * as Sentry from '@sentry/node';
 import { TelegramError, type Telegram } from 'telegraf';
-import { listGroupChats, removeGroupChat } from './storage/groupChats.js';
+import { listGroupChats, removeGroupChat } from '../storage/groupChats.js';
 
 async function sendAndTrack(
   telegram: Telegram,

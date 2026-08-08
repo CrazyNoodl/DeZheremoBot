@@ -1,5 +1,5 @@
 import type { Context } from 'telegraf';
-import { escapeHtml, placeLink } from '../htmlFormat.js';
+import { escapeHtml, placeLink } from '../utils/htmlFormat.js';
 import { getAllSubmissions } from '../services/submissionService.js';
 import { isChatMember } from './access.js';
 import { withGroupLabel } from './menuMessage.js';
