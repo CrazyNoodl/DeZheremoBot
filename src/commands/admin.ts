@@ -2,7 +2,7 @@ import { Markup, type Context } from 'telegraf';
 import { buildDrawAnnouncement } from '../messaging/announcements.js';
 import { placeLabel, placeLinkWithHint } from '../utils/htmlFormat.js';
 import { handleAdminEntryCommand, isGroupAdmin, showGatedMenu } from './access.js';
-import { formatKyivDateTime, getKyivNow } from '../utils/kyivTime.js';
+import { formatKyivDate, formatKyivDateTime, getKyivNow } from '../utils/kyivTime.js';
 import { getLastTickAt, sendRatingSurvey, SCHEDULER_STUCK_THRESHOLD_MS } from '../scheduler.js';
 import {
   blockUserFromGroup,
@@ -25,7 +25,7 @@ import { listAdminActions, logAdminAction, type AdminAction, type AdminActionRec
 import { markFired } from '../storage/firedEvents.js';
 import { formatBytes, getStorageDiagnostics } from '../storage/diagnostics.js';
 import { getHistoricalSubmitters, getTopParticipants, getTopWinningPlaces } from '../storage/history.js';
-import { getTopRaters } from '../storage/placeRatings.js';
+import { getPlaceRatingSummaries, getTopRaters, type PlaceRatingSummary, type PlaceVote } from '../storage/placeRatings.js';
 import { clearRatingSelection, getRatingSelection, setRatingSelection } from '../storage/ratingSelectionState.js';
 import { sendToChat } from '../messaging/telegramBroadcast.js';
 import { createPanel, safeAnswerCbQuery } from './panel.js';
@@ -367,6 +367,7 @@ function buildStatsMenuKeyboard(chatId: number) {
   return Markup.inlineKeyboard([
     [Markup.button.callback('🏆 Топ переможців', `admin:stats_top:${chatId}`)],
     [Markup.button.callback('📈 Активність', `admin:stats_activity:${chatId}`)],
+    [Markup.button.callback('⭐ Оцінки місць', `admin:stats_ratings:${chatId}`)],
     [Markup.button.callback('‹ Назад', `admin:experimental:${chatId}`)],
   ]);
 }
@@ -421,6 +422,127 @@ function buildActivityText(chatId: number): string {
 
 async function renderActivityPanel(ctx: Context, userId: number, chatId: number): Promise<void> {
   await panel.update(ctx, userId, buildActivityText(chatId), buildStatsBackKeyboard(chatId));
+}
+
+function formatVoteEntry(v: PlaceVote): string {
+  const dateLabel = formatKyivDate(v.ratedAt);
+  return v.stars !== null ? `${v.stars}★ (${dateLabel})` : `🙅 не був (${dateLabel})`;
+}
+
+// Rendered as HTML for the same reason buildTopWinnersText is: placeLinkWithHint keeps two
+// different generic-fallback places distinguishable and still tappable, not just two identical
+// "заклад" labels.
+function buildPlaceRatingBlock(summary: PlaceRatingSummary, rank: number): string {
+  const header =
+    `${rank}. ${placeLinkWithHint(summary.place)} — ` +
+    (summary.averageStars !== null
+      ? `середня ${summary.averageStars.toFixed(1)}★ (${summary.ratingCount})`
+      : 'ще немає оцінок');
+  if (summary.votes.length === 0) return header;
+
+  // A place that's won more than once can get several votes from the same person — one per visit
+  // (e.g. skipped one week, went and rated the next) — so votes are grouped by user into one line
+  // with every visit's own date, rather than one bullet per vote reading as an accidental
+  // duplicate. summary.votes already arrives most-recent-first, and Map preserves insertion order,
+  // so both the line order and each line's own date order fall out for free with no extra sort.
+  const entriesByUser = new Map<number, { username: string; entries: string[] }>();
+  for (const vote of summary.votes) {
+    const existing = entriesByUser.get(vote.userId);
+    if (existing) {
+      existing.entries.push(formatVoteEntry(vote));
+    } else {
+      entriesByUser.set(vote.userId, { username: vote.username, entries: [formatVoteEntry(vote)] });
+    }
+  }
+  const voteLines = Array.from(entriesByUser.entries())
+    .map(([userId, { username, entries }]) => `   • ${displayName(username, userId)} — ${entries.join(', ')}`)
+    .join('\n');
+  return `${header}\n${voteLines}`;
+}
+
+// A place with one lucky 5★ vote would otherwise outrank one with ten votes averaging 4.5★ — too
+// small a sample to call it "better." Places below this many real ratings are split into their own
+// "мало даних" section instead of competing in the main ranking at all.
+const MIN_RELIABLE_RATINGS = 3;
+
+// Fewer per page than AUDIT_LOG_PAGE_SIZE's 10: a place's block can carry several vote lines
+// underneath it, so the same page-size number covers far more actual text here.
+const PLACE_RATINGS_PAGE_SIZE = 5;
+
+interface RankedPlaceRatingSummary extends PlaceRatingSummary {
+  rank: number; // 1-based, within its own section — stable across pages, unlike a flat page index
+  section: 'reliable' | 'lowData';
+}
+
+// Ranks the "reliable" group by average (getPlaceRatingSummaries already sorts that way, so
+// filtering preserves it) and the "мало даних" group by rating count then average — most-answered
+// among the sparse ones first, fully-unrated ones (ratingCount 0) trail to the very end.
+function rankPlaceRatings(chatId: number): RankedPlaceRatingSummary[] {
+  const summaries = getPlaceRatingSummaries(chatId);
+  const reliable = summaries.filter((s) => s.ratingCount >= MIN_RELIABLE_RATINGS);
+  const lowData = summaries
+    .filter((s) => s.ratingCount < MIN_RELIABLE_RATINGS)
+    .sort((a, b) => b.ratingCount - a.ratingCount || (b.averageStars ?? -1) - (a.averageStars ?? -1));
+  return [
+    ...reliable.map((s, i) => ({ ...s, rank: i + 1, section: 'reliable' as const })),
+    ...lowData.map((s, i) => ({ ...s, rank: i + 1, section: 'lowData' as const })),
+  ];
+}
+
+interface PlaceRatingsPage {
+  text: string;
+  page: number;
+  totalPages: number;
+}
+
+// Same shape as buildAuditLogPage: fetch once, slice the already-ranked array for the requested
+// page, clamping a stale/out-of-range page number rather than trusting it as-is.
+function buildPlaceRatingsPage(chatId: number, requestedPage: number): PlaceRatingsPage {
+  const ranked = rankPlaceRatings(chatId);
+  if (ranked.length === 0) {
+    return { text: '⭐ Оцінки місць\n\nЩе не було жодного розіграшу з переможцем.', page: 0, totalPages: 0 };
+  }
+
+  const totalPages = Math.ceil(ranked.length / PLACE_RATINGS_PAGE_SIZE);
+  const page = Math.min(Math.max(requestedPage, 0), totalPages - 1);
+  const start = page * PLACE_RATINGS_PAGE_SIZE;
+  const pageItems = ranked.slice(start, start + PLACE_RATINGS_PAGE_SIZE);
+
+  // A section header is inserted only where that section actually starts on this page, so a page
+  // that's entirely inside one section (the common case) gets just the one heading, not a repeat.
+  const blocks: string[] = [];
+  let lastSection: 'reliable' | 'lowData' | undefined;
+  for (const item of pageItems) {
+    if (item.section !== lastSection) {
+      blocks.push(
+        item.section === 'reliable'
+          ? '🏆 Рейтинг'
+          : `📉 Мало даних (менше ${MIN_RELIABLE_RATINGS} оцінок)`,
+      );
+      lastSection = item.section;
+    }
+    blocks.push(buildPlaceRatingBlock(item, item.rank));
+  }
+
+  const text = `⭐ Оцінки місць (стор. ${page + 1}/${totalPages})\n\n${blocks.join('\n\n')}`;
+  return { text, page, totalPages };
+}
+
+function buildPlaceRatingsKeyboard(chatId: number, page: number, totalPages: number) {
+  const navRow: ReturnType<typeof Markup.button.callback>[] = [];
+  if (page > 0) navRow.push(Markup.button.callback('‹ Попередні', `admin:stats_ratings:${chatId}:${page - 1}`));
+  if (page < totalPages - 1) navRow.push(Markup.button.callback('Наступні ›', `admin:stats_ratings:${chatId}:${page + 1}`));
+  const rows = navRow.length > 0 ? [navRow] : [];
+  rows.push([Markup.button.callback('‹ Назад', `admin:stats:${chatId}`)]);
+  return Markup.inlineKeyboard(rows);
+}
+
+async function renderPlaceRatingsPanel(ctx: Context, userId: number, chatId: number, page: number): Promise<void> {
+  const { text, page: clampedPage, totalPages } = buildPlaceRatingsPage(chatId, page);
+  await panel.update(ctx, userId, text, buildPlaceRatingsKeyboard(chatId, clampedPage, totalPages), {
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+  });
 }
 
 async function renderAdminPanel(ctx: Context, userId: number, chatId: number): Promise<void> {
@@ -595,6 +717,11 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
 
   if (action === 'stats_activity') {
     await renderActivityPanel(ctx, userId, chatId);
+    return;
+  }
+
+  if (action === 'stats_ratings') {
+    await renderPlaceRatingsPanel(ctx, userId, chatId, targetUserId ?? 0);
     return;
   }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { formatKyivDateTime, getKyivNow } from './kyivTime.js';
+import { formatKyivDate, formatKyivDateTime, getKyivNow } from './kyivTime.js';
 
 // Expected values below were computed independently via Python's zoneinfo (Europe/Kyiv), not by
 // running this module — the point is to catch a wrong timezone id, a wrong WEEKDAY_INDEX mapping,
@@ -57,6 +57,14 @@ test('formatKyivDateTime renders DD.MM HH:MM in Kyiv time (EEST, summer)', () =>
 
 test('formatKyivDateTime rolls a late-UTC moment over to the next Kyiv calendar day', () => {
   assert.equal(formatKyivDateTime(new Date('2024-01-15T22:30:00Z').getTime()), '16.01 00:30');
+});
+
+test('formatKyivDate renders DD.MM in Kyiv time, dropping the time', () => {
+  assert.equal(formatKyivDate(new Date('2024-01-15T08:00:00Z').getTime()), '15.01');
+});
+
+test('formatKyivDate rolls a late-UTC moment over to the next Kyiv calendar day', () => {
+  assert.equal(formatKyivDate(new Date('2024-01-15T22:30:00Z').getTime()), '16.01');
 });
 
 test('weekday indices match Sun=0..Sat=6 across a full week', (t) => {

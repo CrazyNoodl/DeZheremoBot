@@ -40,6 +40,16 @@ export function formatKyivDateTime(ms: number): string {
   return `${day}.${month} ${hour}:${minute}`;
 }
 
+// Same day/month, without the time — used by /admin's "⭐ Оцінки місць" tab to label each vote for
+// a repeat-winning place with which visit it belongs to (a bare "was there"/star count alone reads
+// as an accidental duplicate rather than two separate weeks).
+export function formatKyivDate(ms: number): string {
+  const parts = kyivDateTimeFormatter.formatToParts(new Date(ms));
+  const day = parts.find((p) => p.type === 'day')!.value;
+  const month = parts.find((p) => p.type === 'month')!.value;
+  return `${day}.${month}`;
+}
+
 // Shared by scheduler.ts's per-minute tick and commands/schedule.ts's admin "force draw now"
 // action — both need the same notion of "today" in Kyiv time to mark fired_events consistently,
 // independent of the server's own timezone.

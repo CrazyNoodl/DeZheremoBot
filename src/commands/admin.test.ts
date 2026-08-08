@@ -23,6 +23,8 @@ const {
 const { listAdminActions } = await import('../storage/auditLog.js');
 const { getRatingSelection } = await import('../storage/ratingSelectionState.js');
 const { isRatingSurveyEnabled } = await import('../services/ratingService.js');
+const { getLatestDraw } = await import('../storage/history.js');
+const { addOrUpdateRating, markAsAbsent } = await import('../storage/placeRatings.js');
 
 function fakeCtx(status: string, userId: number) {
   const alerts: string[] = [];
@@ -553,6 +555,192 @@ test('handleAdminAction "stats_activity" lists top participants and top raters',
   assert.equal(replies.some((r) => /Ще ніхто не оцінював/.test(r)), true); // nobody rated yet
 });
 
+test('handleAdminAction "stats_ratings" shows nothing-yet text when the group has never had a winning draw', async () => {
+  const userId = 30037;
+  const chatId = -30037;
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:stats_ratings:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(replies.some((r) => /жодного розіграшу/.test(r)), true);
+  assert.deepEqual(listAdminActions(chatId), []); // pure navigation, never logged
+});
+
+test('handleAdminAction "stats_ratings" shows the average (absent excluded) plus every voter (absent included)', async () => {
+  const userId = 30038;
+  const chatId = -30038;
+  // All three submit that week — recordDraw persists every submitter's row to submissions_history
+  // (not just the winner's), which is what the real rating survey targets: everyone who submitted
+  // that week is asked to rate whichever place actually won.
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/somewhere');
+  submitPlace(chatId, 2, 'olya', 'https://www.instagram.com/elsewhere');
+  submitPlace(chatId, 3, 'ivan', 'https://www.instagram.com/thirdplace');
+
+  const { ctx: drawCtx, rawCtx: drawRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx);
+
+  const drawId = getLatestDraw(chatId)!.id;
+  addOrUpdateRating(drawId, 1, 4);
+  addOrUpdateRating(drawId, 2, 2);
+  markAsAbsent(drawId, 3);
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:stats_ratings:${chatId}`);
+  await handleAdminAction(ctx);
+
+  const text = replies.at(-1) ?? '';
+  assert.match(text, /середня 3\.0★ \(2\)/); // (4 + 2) / 2, the absent tap excluded from this average
+  assert.match(text, /@artem — 4★/);
+  assert.match(text, /@olya — 2★/);
+  assert.match(text, /@ivan — 🙅 не був/); // still listed among the voters
+});
+
+test('handleAdminAction "stats_ratings" groups a repeat winner\'s two visits from the same person into one line, not two', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+
+  const userId = 30046;
+  const chatId = -30046;
+  // Same place wins two separate weeks; the same person answers the survey differently each time
+  // (skipped the first, went to the second) — this used to render as two bullets for "@artem" that
+  // read like an accidental duplicate rather than two distinct visits.
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/samespot');
+  const { ctx: drawCtx1, rawCtx: drawRawCtx1 } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx1, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx1);
+  markAsAbsent(getLatestDraw(chatId)!.id, 1);
+
+  t.mock.timers.tick(10_001); // past submitPlace's own resubmit cooldown
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/samespot');
+  const { ctx: drawCtx2, rawCtx: drawRawCtx2 } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx2, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx2);
+  addOrUpdateRating(getLatestDraw(chatId)!.id, 1, 4);
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:stats_ratings:${chatId}`);
+  await handleAdminAction(ctx);
+
+  const text = replies.at(-1) ?? '';
+  const artemLines = text.split('\n').filter((line) => line.includes('@artem'));
+  assert.equal(artemLines.length, 1); // one line, not one bullet per visit
+  assert.match(artemLines[0], /4★ \(\d\d\.\d\d\)/);
+  assert.match(artemLines[0], /🙅 не був \(\d\d\.\d\d\)/);
+});
+
+test('handleAdminAction "stats_ratings" keeps a place with one lucky vote out of the main ranking', async () => {
+  const userId = 30047;
+  const chatId = -30047;
+
+  // "reliableplace" wins three separate weeks, rated 4★ by three different people — a real sample.
+  for (const submitterId of [1, 2, 3]) {
+    submitPlace(chatId, submitterId, `user${submitterId}`, 'https://www.instagram.com/reliableplace');
+    const { ctx: drawCtx, rawCtx: drawRawCtx } = fakeCtx('administrator', userId);
+    withCallbackData(drawRawCtx, `admin:draw:${chatId}`);
+    await handleAdminAction(drawCtx);
+    addOrUpdateRating(getLatestDraw(chatId)!.id, submitterId, 4);
+  }
+
+  // "luckyplace" wins once and gets a single 5★ — too small a sample to outrank the place above.
+  submitPlace(chatId, 4, 'user4', 'https://www.instagram.com/luckyplace');
+  const { ctx: drawCtx2, rawCtx: drawRawCtx2 } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx2, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx2);
+  addOrUpdateRating(getLatestDraw(chatId)!.id, 4, 5);
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:stats_ratings:${chatId}`);
+  await handleAdminAction(ctx);
+
+  const text = replies.at(-1) ?? '';
+  const reliableHeader = text.indexOf('🏆 Рейтинг');
+  const lowDataHeader = text.indexOf('📉 Мало даних');
+  const reliablePlace = text.indexOf('reliableplace');
+  const luckyPlace = text.indexOf('luckyplace');
+  // Sections, not just sort order: the 5★-but-single-vote place sits under its own "мало даних"
+  // heading, entirely below the 4★/3-votes place's ranked section, despite the higher raw average.
+  assert.equal(reliableHeader > -1 && lowDataHeader > reliableHeader, true);
+  assert.equal(reliablePlace > reliableHeader && reliablePlace < lowDataHeader, true);
+  assert.equal(luckyPlace > lowDataHeader, true);
+});
+
+test('handleAdminAction "stats_ratings" paginates at 5 places per page with working ‹ Попередні / Наступні › buttons', async () => {
+  const userId = 30048;
+  const chatId = -30048;
+
+  // 6 different winning places (each a single, unrated draw) -> 2 pages of 5 + 1.
+  for (let i = 0; i < 6; i++) {
+    submitPlace(chatId, i + 1, `user${i}`, `https://www.instagram.com/place${i}`);
+    const { ctx: drawCtx, rawCtx: drawRawCtx } = fakeCtx('administrator', userId);
+    withCallbackData(drawRawCtx, `admin:draw:${chatId}`);
+    await handleAdminAction(drawCtx);
+  }
+
+  const {
+    ctx: page0Ctx,
+    rawCtx: page0RawCtx,
+    replies: page0Replies,
+    replyButtons: page0Buttons,
+  } = fakeCtx('administrator', userId);
+  withCallbackData(page0RawCtx, `admin:stats_ratings:${chatId}:0`);
+  await handleAdminAction(page0Ctx);
+  const page0Text = page0Replies.at(-1) ?? '';
+  assert.match(page0Text, /стор\. 1\/2/);
+  assert.equal((page0Text.match(/\d+\. <a href=/g) ?? []).length, 5);
+  assert.deepEqual(page0Buttons[0]?.map((b) => b.text), ['Наступні ›', '‹ Назад']);
+
+  const nextButton = page0Buttons[0]?.find((b) => b.text === 'Наступні ›');
+  const {
+    ctx: page1Ctx,
+    rawCtx: page1RawCtx,
+    replies: page1Replies,
+    replyButtons: page1Buttons,
+  } = fakeCtx('administrator', userId);
+  withCallbackData(page1RawCtx, nextButton!.callback_data);
+  await handleAdminAction(page1Ctx);
+  const page1Text = page1Replies.at(-1) ?? '';
+  assert.match(page1Text, /стор\. 2\/2/);
+  assert.equal((page1Text.match(/\d+\. <a href=/g) ?? []).length, 1);
+  assert.deepEqual(page1Buttons[0]?.map((b) => b.text), ['‹ Попередні', '‹ Назад']);
+});
+
+test('handleAdminAction "stats_ratings" ranks places by average rating, unrated places last', async () => {
+  const userId = 30039;
+  const chatId = -30039;
+
+  // A different submitter per draw, not the same one resubmitting three times in a row — the
+  // latter would trip submitPlace's own 10s rate limit (see CLAUDE.md's "Submission + public
+  // announcement"), rejecting the 2nd/3rd change and leaving those draws with no real winner.
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/lowrated');
+  const { ctx: drawCtx1, rawCtx: drawRawCtx1 } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx1, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx1);
+  addOrUpdateRating(getLatestDraw(chatId)!.id, 1, 2);
+
+  submitPlace(chatId, 2, 'olya', 'https://www.instagram.com/highrated');
+  const { ctx: drawCtx2, rawCtx: drawRawCtx2 } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx2, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx2);
+  addOrUpdateRating(getLatestDraw(chatId)!.id, 2, 5);
+
+  submitPlace(chatId, 3, 'ivan', 'https://www.instagram.com/neverrated');
+  const { ctx: drawCtx3, rawCtx: drawRawCtx3 } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx3, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx3);
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:stats_ratings:${chatId}`);
+  await handleAdminAction(ctx);
+
+  const text = replies.at(-1) ?? '';
+  const highIndex = text.indexOf('highrated');
+  const lowIndex = text.indexOf('lowrated');
+  const neverIndex = text.indexOf('neverrated');
+  assert.equal(highIndex > -1 && lowIndex > highIndex && neverIndex > lowIndex, true);
+  assert.match(text, /ще немає оцінок/);
+});
+
 test('handleAdminAction "select" shows the hub with 4 category buttons, not individual actions', async () => {
   const userId = 30028;
   const chatId = -30028;
@@ -617,10 +805,15 @@ test('handleAdminAction "stats" back button returns to the experimental hub, not
   assert.equal(backButton?.callback_data, `admin:experimental:${chatId}`);
 });
 
-test('handleAdminAction refuses "stats"/"stats_top"/"stats_activity" for a demoted admin', async () => {
+test('handleAdminAction refuses "stats"/"stats_top"/"stats_activity"/"stats_ratings" for a demoted admin', async () => {
   const chatId = -30026;
 
-  for (const data of [`admin:stats:${chatId}`, `admin:stats_top:${chatId}`, `admin:stats_activity:${chatId}`]) {
+  for (const data of [
+    `admin:stats:${chatId}`,
+    `admin:stats_top:${chatId}`,
+    `admin:stats_activity:${chatId}`,
+    `admin:stats_ratings:${chatId}`,
+  ]) {
     const { ctx, rawCtx, alerts, replies } = fakeCtx('member', 30026);
     withCallbackData(rawCtx, data);
     await handleAdminAction(ctx);
