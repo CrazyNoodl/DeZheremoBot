@@ -21,6 +21,7 @@ import {
 } from './commands/menu.js';
 import { handleScheduleAction, handleScheduleCommand } from './commands/schedule.js';
 import { handleTextMessage } from './commands/text.js';
+import { handleTimeSlotPollAction } from './commands/timeSlotPoll.js';
 import { startScheduler } from './scheduler.js';
 import { addGroupChat } from './storage/groupChats.js';
 
@@ -68,6 +69,7 @@ bot.command('schedule', handleScheduleCommand);
 bot.action(/^admin:/, handleAdminAction);
 bot.command('admin', handleAdminCommand);
 bot.action(/^rate:/, handleRateAction);
+bot.action(/^tsp:/, handleTimeSlotPollAction);
 bot.command('help', handleHelpCommand);
 bot.command('releasenotes', handleReleaseNotesCommand);
 bot.on('text', handleTextMessage);

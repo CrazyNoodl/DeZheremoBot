@@ -21,6 +21,8 @@ import {
   unblockUserFromGroup,
 } from '../services/submissionService.js';
 import { getRatingSurveyContext, isRatingSurveyEnabled, setRatingSurveyEnabled } from '../services/ratingService.js';
+import { getSchedule } from '../services/scheduleService.js';
+import { getTimeSlotSuggestion, isTimeSlotPollEnabled, setTimeSlotPollEnabled } from '../services/timeSlotPollService.js';
 import { listAdminActions, logAdminAction, type AdminAction, type AdminActionRecord } from '../storage/auditLog.js';
 import { markFired } from '../storage/firedEvents.js';
 import { formatBytes, getStorageDiagnostics } from '../storage/diagnostics.js';
@@ -102,6 +104,7 @@ async function renderCyclePanel(ctx: Context, userId: number, chatId: number): P
 function buildExperimentalKeyboard(chatId: number) {
   return Markup.inlineKeyboard([
     [Markup.button.callback('📊 Статистика', `admin:stats:${chatId}`)],
+    [Markup.button.callback('🗓 Опитування про час', `admin:timeslot:${chatId}`)],
     [Markup.button.callback('🩺 Діагностика планувальника', `admin:diagnostics:${chatId}`)],
     [Markup.button.callback('📜 Лог дій адмінів', `admin:auditlog:${chatId}:0`)],
     [Markup.button.callback('‹ Назад', `admin:select:${chatId}`)],
@@ -118,6 +121,45 @@ async function renderExperimentalMenu(ctx: Context, userId: number, chatId: numb
     '🧪 Експериментальні функції\n\nСюди потрапляють нові можливості, поки їх не доведено до ладу.\n\nОбери, що подивитися:',
     buildExperimentalKeyboard(chatId),
   );
+}
+
+// Same weekday labeling/ordering as schedule.ts's own copy (WEEKDAY_LABELS + WEEK_ORDER) —
+// duplicated rather than shared, same reasoning as every other file's own copy of this array: a
+// Mon-first reading order regardless of the 0=Sunday indexing the values themselves use.
+const WEEKDAY_LABELS = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+function formatWeekdays(weekdays: number[]): string {
+  return WEEK_ORDER.filter((day) => weekdays.includes(day))
+    .map((day) => WEEKDAY_LABELS[day])
+    .join(', ');
+}
+
+// Same enable/disable-toggle-only shape as buildRatingHubText/Keyboard — day/time config stays in
+// /schedule (see CLAUDE.md's "Post-draw rating survey" for why the split exists), this screen only
+// controls whether the poll fires at all. Read-only echo of the current config for context, same
+// as buildRatingHubText showing "День і час опитування налаштовуються в /schedule → ⭐ Опитування."
+function buildTimeSlotPollText(chatId: number, enabled: boolean): string {
+  const schedule = getSchedule(chatId);
+  const timesLabel = schedule.timeSlotPollTimes.length > 0 ? ` (${schedule.timeSlotPollTimes.join(', ')})` : '';
+  return (
+    `🗓 Опитування про доступність (експериментальне)\n\n` +
+    `Стан: ${enabled ? 'увімкнено' : 'вимкнено'}\n` +
+    `Дні і години: ${formatWeekdays(schedule.timeSlotPollWeekdays)}${timesLabel}\n\n` +
+    `Налаштовуються в /schedule → 🗓 Опитування про час.`
+  );
+}
+
+function buildTimeSlotPollKeyboard(chatId: number, enabled: boolean) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback(enabled ? '🔕 Вимкнути' : '🔛 Увімкнути', `admin:timeslot_toggle:${chatId}`)],
+    [Markup.button.callback('‹ Назад', `admin:experimental:${chatId}`)],
+  ]);
+}
+
+async function renderTimeSlotPollMenu(ctx: Context, userId: number, chatId: number): Promise<void> {
+  const enabled = isTimeSlotPollEnabled(chatId);
+  await panel.update(ctx, userId, buildTimeSlotPollText(chatId, enabled), buildTimeSlotPollKeyboard(chatId, enabled));
 }
 
 // Content is global (one scheduler tick loop and one pair of DB files for the whole bot), not
@@ -170,6 +212,9 @@ const ADMIN_ACTION_LABELS: Record<AdminAction, string> = {
   rating_toggle: 'Перемкнув опитування',
   edit_rating: 'Змінив розклад опитування',
   send_rating_survey: 'Надіслав опитування',
+  edit_timeslot_days: 'Змінив дні опитування про час',
+  edit_timeslot_times: 'Змінив години опитування про час',
+  toggle_timeslot_poll: 'Перемкнув опитування про час',
 };
 
 const AUDIT_LOG_PAGE_SIZE = 10;
@@ -644,6 +689,19 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
     return;
   }
 
+  if (action === 'timeslot') {
+    await renderTimeSlotPollMenu(ctx, userId, chatId);
+    return;
+  }
+
+  if (action === 'timeslot_toggle') {
+    const next = !isTimeSlotPollEnabled(chatId);
+    setTimeSlotPollEnabled(chatId, next);
+    logAdminAction({ chatId, actorUserId: userId, actorName, action: 'toggle_timeslot_poll', detail: next ? 'on' : 'off' });
+    await renderTimeSlotPollMenu(ctx, userId, chatId);
+    return;
+  }
+
   if (action === 'auditlog') {
     await renderAuditLogPanel(ctx, userId, chatId, targetUserId ?? 0);
     return;
@@ -667,6 +725,9 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
     const winner = pickWeeklyWinner(chatId);
     // Computed before recordDraw persists this draw — see that function's own comment for why.
     const isRepeat = isRepeatWinner(chatId, winner);
+    // Computed before resetWeek clears this week's time_slot_responses — same "read before the
+    // reset wipes it" reasoning as isRepeat/recordDraw's own listSubmissions read.
+    const suggestion = getTimeSlotSuggestion(chatId);
     recordDraw(chatId, winner);
     // Same ordering as scheduler.ts's own draw branch: reset before the network send, so a
     // crash/failure during that send never leaves the chat stuck locked.
@@ -681,7 +742,7 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
       action: 'draw',
       detail: winner ? `winner:${winner.userId}` : undefined,
     });
-    await sendToChat(ctx.telegram, chatId, buildDrawAnnouncement(winner, isRepeat), { parse_mode: 'HTML' });
+    await sendToChat(ctx.telegram, chatId, buildDrawAnnouncement(winner, isRepeat, suggestion), { parse_mode: 'HTML' });
     await renderCyclePanel(ctx, userId, chatId);
     return;
   }

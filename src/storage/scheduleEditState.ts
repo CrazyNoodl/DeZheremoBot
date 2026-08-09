@@ -5,7 +5,10 @@ export type ScheduleEditState =
   | { flow: 'deadline'; step: 'lockTime'; chatId: number; weekday: number }
   | { flow: 'deadline'; step: 'drawTime'; chatId: number; weekday: number; lockTime: string }
   | { flow: 'rating'; step: 'weekday'; chatId: number }
-  | { flow: 'rating'; step: 'time'; chatId: number; weekday: number };
+  | { flow: 'rating'; step: 'time'; chatId: number; weekday: number }
+  | { flow: 'timeslot_days'; chatId: number; selected: Set<number> }
+  | { flow: 'timeslot_times'; step: 'list'; chatId: number; times: string[] }
+  | { flow: 'timeslot_times'; step: 'add'; chatId: number; times: string[] };
 
 const editStates = new Map<number, ScheduleEditState>();
 

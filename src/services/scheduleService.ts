@@ -9,9 +9,16 @@ export type { GroupScheduleConfig };
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
+// 1 to 5 hour options on the availability poll's hour screen — 0 is also valid (means the hour
+// screen is skipped entirely) but that's the empty array, not a MIN constant to check against.
+export const MAX_TIME_SLOTS = 5;
+
 export type UpdateResult =
   | { ok: true }
-  | { ok: false; reason: 'invalid_time' | 'draw_before_lock' | 'reminder_after_lock' };
+  | {
+      ok: false;
+      reason: 'invalid_time' | 'draw_before_lock' | 'reminder_after_lock' | 'timeslot_deadline_conflict' | 'too_many_time_slots';
+    };
 
 export function isValidTime(value: string): boolean {
   return TIME_RE.test(value);
@@ -75,6 +82,12 @@ export function updateDeadlineSchedule(
   if (drawTime <= lockTime) return { ok: false, reason: 'draw_before_lock' };
 
   const current = getGroupSchedule(chatId);
+  // The availability poll only ever offers days after the deadline (see
+  // updateTimeSlotPollWeekdays below) — moving the deadline onto a day already configured there
+  // would leave that config silently inconsistent, so this is rejected the same way a
+  // reminder/lock conflict already is, rather than the poll's config being left to drift.
+  if (current.timeSlotPollWeekdays.includes(weekday)) return { ok: false, reason: 'timeslot_deadline_conflict' };
+
   const next = { ...current, deadlineWeekday: weekday, lockTime, drawTime };
   if (reminderConflictsWithLock(next)) return { ok: false, reason: 'reminder_after_lock' };
 
@@ -94,5 +107,30 @@ export function updateRatingSurveySchedule(chatId: number, weekday: number, time
 
   const current = getGroupSchedule(chatId);
   setGroupSchedule(chatId, { ...current, ratingSurveyWeekday: weekday, ratingSurveyTime: time });
+  return { ok: true };
+}
+
+// Because weekdays are cyclic, "must start the day after the deadline" reduces to a simple
+// exclusion: every day except deadlineWeekday itself already falls after this week's deadline and
+// before next week's (e.g. for a Friday deadline, Sat through Thu all qualify — only Friday
+// doesn't). The UI enforces "at least 1 day selected" itself (mirroring updateReminderSchedule,
+// which doesn't check that here either); this only guards the deadline-day exclusion.
+export function updateTimeSlotPollWeekdays(chatId: number, weekdays: number[]): UpdateResult {
+  const current = getGroupSchedule(chatId);
+  if (weekdays.includes(current.deadlineWeekday)) return { ok: false, reason: 'timeslot_deadline_conflict' };
+
+  setGroupSchedule(chatId, { ...current, timeSlotPollWeekdays: weekdays });
+  return { ok: true };
+}
+
+// Times are built up incrementally in commands/schedule.ts's wizard (add/remove one at a time,
+// validated there before this is called with the final list) — this re-validates defensively
+// rather than trusting the caller blindly.
+export function updateTimeSlotPollTimes(chatId: number, times: string[]): UpdateResult {
+  if (times.some((t) => !isValidTime(t))) return { ok: false, reason: 'invalid_time' };
+  if (times.length > MAX_TIME_SLOTS) return { ok: false, reason: 'too_many_time_slots' };
+
+  const current = getGroupSchedule(chatId);
+  setGroupSchedule(chatId, { ...current, timeSlotPollTimes: times });
   return { ok: true };
 }

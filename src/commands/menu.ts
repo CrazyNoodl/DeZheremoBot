@@ -4,7 +4,21 @@ import { escapeHtml, placeLabel, placeLink } from '../utils/htmlFormat.js';
 import { isChatMember } from './access.js';
 import { PLACE_LINK_FORMAT_HINT, promptForPlace } from './add.js';
 import { DECLINE_GROUP_ACTION } from './keyboard.js';
-import { buildMenuKeyboard, buildMenuText, DECLINE_ACTION, sendMenuMessage, SUBMIT_ACTION, updateMenuMessage } from './menuMessage.js';
+import {
+  BLOCKED_MESSAGE,
+  buildMenuKeyboard,
+  buildMenuText,
+  DECLINE_ACTION,
+  gateMessageFor,
+  isStaleMenuTap,
+  PAUSED_MESSAGE,
+  renderGateIfBlocked,
+  sendMenuMessage,
+  STALE_MENU_TAP_MESSAGE,
+  SUBMIT_ACTION,
+  updateMenuMessage,
+} from './menuMessage.js';
+import { maybeOfferTimeSlotPoll } from './timeSlotPoll.js';
 import { safeAnswerCbQuery } from './panel.js';
 import {
   declinePlace,
@@ -20,73 +34,13 @@ import {
 import { getMenuMessage } from '../storage/menuMessages.js';
 import { sendToChat } from '../messaging/telegramBroadcast.js';
 
-export { SUBMIT_ACTION, DECLINE_ACTION, DECLINE_GROUP_ACTION };
+export { SUBMIT_ACTION, DECLINE_ACTION, DECLINE_GROUP_ACTION, BLOCKED_MESSAGE, PAUSED_MESSAGE };
 
 // Bare action (no group/place embedded in callback_data) — same reasoning as SUBMIT_ACTION/
 // DECLINE_ACTION: this screen is itself the tracked private-chat menu card, so
 // handleResubmitDeclinedAction below recovers the group from getMenuMessage the same way
 // handleSubmitAction does.
 export const RESUBMIT_DECLINED_ACTION = 'resubmit_declined';
-
-// Exported so text.ts's rejection replies for the same two states reuse these literals instead of
-// retyping them — one string each, so wording can't drift between "opening the menu while
-// blocked/paused" and "typing a place while blocked/paused".
-export const PAUSED_MESSAGE = '⏸ Цього тижня ДеЖеремо на паузі — заявки поки не приймаються. Скоро повернемось!';
-export const BLOCKED_MESSAGE = '🚫 Тебе заблокували в цій групі — додавати заявки більше не можна.';
-const LOCKED_MESSAGE = '🔒 Заявки на цей тиждень уже закрито';
-
-// Single source of truth for this three-way message, so handleGroupDeclineAction's upfront gate
-// and its post-declinePlace race-condition fallback below can't drift apart from each other.
-function gateMessageFor(reason: 'blocked' | 'paused' | 'locked'): string {
-  if (reason === 'blocked') return BLOCKED_MESSAGE;
-  if (reason === 'paused') return PAUSED_MESSAGE;
-  return LOCKED_MESSAGE;
-}
-
-const STALE_MENU_TAP_MESSAGE = '🔄 Ця картка вже застаріла — онови меню командою /start, там уже інший стан.';
-
-// Telegram never expires old inline buttons — if the tapped message isn't the one this user's
-// card is currently tracked as (storage/menuMessages.ts), something already updated the *real*
-// tracked card since this one was rendered (a later action edited it in place, or it aged past
-// the 48h edit window and a fresh message replaced it). Acting on a stale card's button would
-// apply whatever it implies (e.g. "Скасувати «не йду»") against the *current* actual state
-// instead of the state the user is looking at — e.g. tapping a stale cancel-decline button while
-// you've since resubmitted a place would silently decline you again instead of doing nothing.
-function isStaleMenuTap(ctx: Context, userId: number): boolean {
-  const query = ctx.callbackQuery;
-  const tappedMessageId = query && 'message' in query ? query.message?.message_id : undefined;
-  const trackedMessageId = getMenuMessage(userId)?.messageId;
-  return tappedMessageId !== undefined && trackedMessageId !== undefined && tappedMessageId !== trackedMessageId;
-}
-
-// Shared by showPersonalMenu and handleSubmitAction, which both need the exact same
-// blocked → paused → locked precedence and messages before doing anything group-cycle-specific.
-// Renders the relevant notice and returns true if one of these gates applies, so the caller just
-// has to `return` when this returns true and fall through to its own logic otherwise.
-async function renderGateIfBlocked(ctx: Context, groupChatId: number, userId: number): Promise<boolean> {
-  // Checked first: a blocked user gets a distinct, permanent-sounding message rather than one
-  // implying they could submit again once the week reopens or resumes.
-  if (isUserBlocked(groupChatId, userId)) {
-    await updateMenuMessage(ctx, groupChatId, userId, BLOCKED_MESSAGE);
-    return true;
-  }
-
-  // Checked ahead of the lock check: pause and lock are independent flags, and a paused group
-  // gets its own distinct message rather than the "closed for this week" lock text.
-  if (isGroupPaused(groupChatId)) {
-    await updateMenuMessage(ctx, groupChatId, userId, PAUSED_MESSAGE);
-    return true;
-  }
-
-  if (isSubmissionLocked(groupChatId)) {
-    // Edits/reuses a stale tracked card if one exists, same as every other state change in this
-    // private chat, instead of always creating a fresh message.
-    await updateMenuMessage(ctx, groupChatId, userId, LOCKED_MESSAGE);
-    return true;
-  }
-
-  return false;
-}
 
 // Small phrase pools (same idea as announcements.ts's) for the messages a member sees most often —
 // their own submit confirmation, and the group's public announcement of it.
@@ -185,6 +139,11 @@ export async function renderSubmitOutcome(
       : `🍽 <b>${escapeHtml(username)}</b> ${pickRandom(NEW_SUBMIT_VERB_POOL)}: ${placeLink(place)}`,
     { parse_mode: 'HTML' },
   );
+
+  // Only for a genuine new/changed place submission (never reached from a decline), and only the
+  // first time this week — maybeOfferTimeSlotPoll itself checks isTimeSlotPollEnabled and whether
+  // a response already exists this week, so resubmitting/editing a place never re-triggers it.
+  await maybeOfferTimeSlotPoll(ctx, groupChatId, userId);
 }
 
 export async function showPersonalMenu(ctx: Context, groupChatId: number): Promise<void> {

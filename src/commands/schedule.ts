@@ -2,13 +2,17 @@ import { Markup, type Context } from 'telegraf';
 import { getKyivNow } from '../utils/kyivTime.js';
 import { sendTaggedReminder } from '../scheduler.js';
 import { isRatingSurveyEnabled } from '../services/ratingService.js';
+import { isTimeSlotPollEnabled } from '../services/timeSlotPollService.js';
 import {
   getSchedule,
   isValidTime,
+  MAX_TIME_SLOTS,
   resetSchedule,
   updateDeadlineSchedule,
   updateRatingSurveySchedule,
   updateReminderSchedule,
+  updateTimeSlotPollTimes,
+  updateTimeSlotPollWeekdays,
   type GroupScheduleConfig,
   type UpdateResult,
 } from '../services/scheduleService.js';
@@ -61,6 +65,11 @@ function buildSummaryText(chatId: number, config: GroupScheduleConfig): string {
       isRatingSurveyEnabled(chatId)
         ? `${WEEKDAY_LABELS[config.ratingSurveyWeekday]} о ${config.ratingSurveyTime}`
         : 'вимкнено (умикається в /admin → ⭐ Опитування)'
+    }\n` +
+    `🗓 Опитування про час: ${
+      isTimeSlotPollEnabled(chatId)
+        ? `${formatWeekdays(config.timeSlotPollWeekdays)}${config.timeSlotPollTimes.length > 0 ? ` (${config.timeSlotPollTimes.join(', ')})` : ''}`
+        : 'вимкнено (умикається в /admin → 🧪 Експериментальні функції)'
     }`
   );
 }
@@ -72,6 +81,9 @@ function buildSummaryKeyboard(chatId: number) {
   ];
   if (isRatingSurveyEnabled(chatId)) {
     rows.push([Markup.button.callback('⭐ Опитування', `sched:rating:${chatId}`)]);
+  }
+  if (isTimeSlotPollEnabled(chatId)) {
+    rows.push([Markup.button.callback('🗓 Опитування про час', `sched:timeslot:${chatId}`)]);
   }
   rows.push(
     [Markup.button.callback('🔔 Надіслати нагадування зараз', `sched:remind:${chatId}`)],
@@ -115,6 +127,71 @@ function buildWeekdayToggleKeyboard(selected: Set<number>) {
 function buildWeekdaySingleSelectKeyboard() {
   const buttons = WEEK_ORDER.map((day) => Markup.button.callback(WEEKDAY_LABELS[day], `sched:day:${day}`));
   return Markup.inlineKeyboard([buttons.slice(0, 4), buttons.slice(4), [Markup.button.callback('⬅️ Назад', 'sched:back')]]);
+}
+
+// Status is shown here for context, but it's read-only — увімкнення/вимкнення lives in /admin's
+// own "🧪 Експериментальні функції" (live-cycle control), same split as the rating survey's own
+// enabled flag. This screen only edits day/time config.
+function buildTimeSlotScreenText(chatId: number, config: GroupScheduleConfig): string {
+  return (
+    `🗓 Опитування про час\n\n` +
+    `Дні: ${formatWeekdays(config.timeSlotPollWeekdays)}\n` +
+    `Години: ${config.timeSlotPollTimes.length > 0 ? config.timeSlotPollTimes.join(', ') : 'не налаштовано (питання про години пропускається)'}`
+  );
+}
+
+function buildTimeSlotScreenKeyboard(chatId: number) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('✏️ Змінити дні', `sched:timeslot_days:${chatId}`)],
+    [Markup.button.callback('✏️ Змінити години', `sched:timeslot_times:${chatId}`)],
+    [Markup.button.callback('⬅️ Назад', `sched:select:${chatId}`)],
+  ]);
+}
+
+async function renderTimeSlotScreen(ctx: Context, userId: number, chatId: number): Promise<void> {
+  // Same as renderRatingScreen: this is also the landing screen after both timeslot wizards
+  // finish, so any leftover wizard state must be cleared here too, not just on the main summary.
+  clearScheduleEditState(userId);
+  const config = getSchedule(chatId);
+  await panel.update(ctx, userId, buildTimeSlotScreenText(chatId, config), buildTimeSlotScreenKeyboard(chatId));
+}
+
+function buildTimeSlotDaysKeyboard(selected: Set<number>) {
+  const buttons = WEEK_ORDER.map((day) =>
+    Markup.button.callback(`${selected.has(day) ? '✅' : '◻️'} ${WEEKDAY_LABELS[day]}`, `sched:tsday:${day}`),
+  );
+  return Markup.inlineKeyboard([
+    buttons.slice(0, 4),
+    buttons.slice(4),
+    [Markup.button.callback('✅ Готово', 'sched:tsdays_done')],
+    [Markup.button.callback('⬅️ Назад', 'sched:back')],
+  ]);
+}
+
+async function renderTimeSlotDaysScreen(ctx: Context, userId: number, selected: Set<number>, error?: string): Promise<void> {
+  const prefix = error ? `${error}\n\n` : '';
+  await panel.update(
+    ctx,
+    userId,
+    `${prefix}Обери дні опитування про час (день дедлайну недоступний):`,
+    buildTimeSlotDaysKeyboard(selected),
+  );
+}
+
+function buildTimeSlotTimesKeyboard(times: string[]) {
+  const rows = times.map((t, i) => [Markup.button.callback(`${t} ✕`, `sched:tstime_remove:${i}`)]);
+  if (times.length < MAX_TIME_SLOTS) {
+    rows.push([Markup.button.callback('➕ Додати час', 'sched:tstime_add')]);
+  }
+  rows.push([Markup.button.callback('✅ Готово', 'sched:tstimes_done')]);
+  rows.push([Markup.button.callback('⬅️ Назад', 'sched:back')]);
+  return Markup.inlineKeyboard(rows);
+}
+
+async function renderTimeSlotTimesScreen(ctx: Context, userId: number, times: string[], error?: string): Promise<void> {
+  const prefix = error ? `${error}\n\n` : '';
+  const body = times.length > 0 ? times.join(', ') : 'ще не додано жодного часу (питання про години буде пропускатись)';
+  await panel.update(ctx, userId, `${prefix}Години опитування про час:\n${body}`, buildTimeSlotTimesKeyboard(times));
 }
 
 async function renderSummary(ctx: Context, userId: number, chatId: number): Promise<void> {
@@ -192,9 +269,19 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
     action === 'reset' ||
     action === 'remind' ||
     action === 'rating' ||
-    action === 'rating_edit'
+    action === 'rating_edit' ||
+    action === 'timeslot' ||
+    action === 'timeslot_days' ||
+    action === 'timeslot_times'
       ? Number(arg)
-      : action === 'day' || action === 'days_done' || action === 'back'
+      : action === 'day' ||
+        action === 'days_done' ||
+        action === 'back' ||
+        action === 'tsday' ||
+        action === 'tsdays_done' ||
+        action === 'tstime_add' ||
+        action === 'tstime_remove' ||
+        action === 'tstimes_done'
         ? getScheduleEditState(userId)?.chatId
         : undefined;
 
@@ -210,6 +297,14 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
   if (action === 'days_done') {
     const state = getScheduleEditState(userId);
     if (state?.flow === 'reminder' && state.step === 'weekdays' && state.selected.size === 0) {
+      await safeAnswerCbQuery(ctx, 'Вибери хоча б один день', { show_alert: true });
+      return;
+    }
+  }
+
+  if (action === 'tsdays_done') {
+    const state = getScheduleEditState(userId);
+    if (state?.flow === 'timeslot_days' && state.selected.size === 0) {
       await safeAnswerCbQuery(ctx, 'Вибери хоча б один день', { show_alert: true });
       return;
     }
@@ -278,14 +373,50 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
     return;
   }
 
+  if (action === 'timeslot') {
+    const chatId = Number(arg);
+    await renderTimeSlotScreen(ctx, userId, chatId);
+    return;
+  }
+
+  if (action === 'timeslot_days') {
+    const chatId = Number(arg);
+    const selected = new Set(getSchedule(chatId).timeSlotPollWeekdays);
+    setScheduleEditStateWithTTL(userId, { flow: 'timeslot_days', chatId, selected });
+    await renderTimeSlotDaysScreen(ctx, userId, selected);
+    return;
+  }
+
+  if (action === 'timeslot_times') {
+    const chatId = Number(arg);
+    const times = getSchedule(chatId).timeSlotPollTimes.slice();
+    setScheduleEditStateWithTTL(userId, { flow: 'timeslot_times', step: 'list', chatId, times });
+    await renderTimeSlotTimesScreen(ctx, userId, times);
+    return;
+  }
+
   if (action === 'back') {
     const state = getScheduleEditState(userId);
     if (!state) return;
-    // The rating wizard is entered from its own sub-screen (not the main summary, unlike
-    // reminder/deadline), so cancelling out of it must land back there too — same destination its
-    // successful-completion path already uses in handleScheduleTextStep.
+    // The rating/timeslot wizards are entered from their own sub-screens (not the main summary,
+    // unlike reminder/deadline), so cancelling out of them must land back there too — same
+    // destination their successful-completion paths already use.
     if (state.flow === 'rating') {
       await renderRatingScreen(ctx, userId, state.chatId);
+    } else if (state.flow === 'timeslot_days') {
+      await renderTimeSlotScreen(ctx, userId, state.chatId);
+    } else if (state.flow === 'timeslot_times') {
+      // Cancelling out of the "add a time" text prompt specifically returns to the times-list
+      // step (keeping whatever was already accumulated there), not all the way out — the same
+      // "back one step, not the whole wizard" shape the deadline flow's lockTime/drawTime steps
+      // don't need (those go straight to CANCEL_KEYBOARD's plain sched:back either way), but this
+      // flow's list screen has its own state to preserve.
+      if (state.step === 'add') {
+        setScheduleEditStateWithTTL(userId, { flow: 'timeslot_times', step: 'list', chatId: state.chatId, times: state.times });
+        await renderTimeSlotTimesScreen(ctx, userId, state.times);
+      } else {
+        await renderTimeSlotScreen(ctx, userId, state.chatId);
+      }
     } else {
       await renderSummary(ctx, userId, state.chatId);
     }
@@ -335,6 +466,94 @@ export async function handleScheduleAction(ctx: Context): Promise<void> {
     await panel.update(ctx, userId, 'Введи час нагадувань у форматі ГГ:ХХ, напр. 10:00', CANCEL_KEYBOARD);
     return;
   }
+
+  if (action === 'tsday') {
+    const day = Number(arg);
+    const state = getScheduleEditState(userId);
+    if (!state || state.flow !== 'timeslot_days') return;
+
+    if (state.selected.has(day)) {
+      state.selected.delete(day);
+    } else {
+      state.selected.add(day);
+    }
+    await renderTimeSlotDaysScreen(ctx, userId, state.selected);
+    return;
+  }
+
+  if (action === 'tsdays_done') {
+    const state = getScheduleEditState(userId);
+    if (!state || state.flow !== 'timeslot_days') return;
+
+    const weekdays = Array.from(state.selected);
+    const result = updateTimeSlotPollWeekdays(state.chatId, weekdays);
+    if (!result.ok) {
+      // Rendered inline on the toggle screen (like reportTimeResult does for reminder/deadline)
+      // rather than a toast — the ack above has already fired, and this needs the selection kept
+      // visible so the admin can adjust it instead of losing where they were.
+      await renderTimeSlotDaysScreen(ctx, userId, state.selected, '⚠️ День дедлайну не може бути серед днів опитування про час — прибери його.');
+      return;
+    }
+
+    logAdminAction({
+      chatId: state.chatId,
+      actorUserId: userId,
+      actorName: ctx.from?.username ?? ctx.from?.first_name,
+      action: 'edit_timeslot_days',
+      detail: `days:${weekdays.join(',')}`,
+    });
+    await renderTimeSlotScreen(ctx, userId, state.chatId);
+    return;
+  }
+
+  if (action === 'tstime_add') {
+    const state = getScheduleEditState(userId);
+    if (!state || state.flow !== 'timeslot_times' || state.step !== 'list') return;
+
+    if (state.times.length >= MAX_TIME_SLOTS) {
+      await renderTimeSlotTimesScreen(ctx, userId, state.times, `⚠️ Вже максимум ${MAX_TIME_SLOTS} годин.`);
+      return;
+    }
+
+    setScheduleEditStateWithTTL(userId, { flow: 'timeslot_times', step: 'add', chatId: state.chatId, times: state.times });
+    await panel.update(ctx, userId, 'Введи новий час у форматі ГГ:ХХ, напр. 20:00', CANCEL_KEYBOARD);
+    return;
+  }
+
+  if (action === 'tstime_remove') {
+    const index = Number(arg);
+    const state = getScheduleEditState(userId);
+    if (!state || state.flow !== 'timeslot_times' || state.step !== 'list') return;
+
+    const times = state.times.filter((_, i) => i !== index);
+    setScheduleEditStateWithTTL(userId, { flow: 'timeslot_times', step: 'list', chatId: state.chatId, times });
+    await renderTimeSlotTimesScreen(ctx, userId, times);
+    return;
+  }
+
+  if (action === 'tstimes_done') {
+    const state = getScheduleEditState(userId);
+    if (!state || state.flow !== 'timeslot_times') return;
+
+    const result = updateTimeSlotPollTimes(state.chatId, state.times);
+    if (!result.ok) {
+      // Rendered inline on the list screen, same as tsdays_done's own failure branch — the admin
+      // needs to see their in-progress list wasn't actually saved, not silently land back on the
+      // summary as if it had been.
+      await renderTimeSlotTimesScreen(ctx, userId, state.times, '⚠️ Не вдалося зберегти години — спробуй ще раз.');
+      return;
+    }
+
+    logAdminAction({
+      chatId: state.chatId,
+      actorUserId: userId,
+      actorName: ctx.from?.username ?? ctx.from?.first_name,
+      action: 'edit_timeslot_times',
+      detail: `times:${state.times.join(',')}`,
+    });
+    await renderTimeSlotScreen(ctx, userId, state.chatId);
+    return;
+  }
 }
 
 function reportTimeResult(
@@ -350,7 +569,9 @@ function reportTimeResult(
         ? '⚠️ Час жеребкування має бути пізніше за lock. Спробуй ще раз.'
         : result.reason === 'reminder_after_lock'
           ? '⚠️ Нагадування випадає в день дедлайну після закриття заявок (lock) — постав раніше.'
-          : '⚠️ Невірний формат. Введи час у форматі ГГ:ХХ.';
+          : result.reason === 'timeslot_deadline_conflict'
+            ? '⚠️ Цей день вже налаштований в опитуванні про час (/schedule → 🗓 Опитування про час) — натисни "⬅️ Скасувати" і обери інший день дедлайну, або спочатку зміни той список.'
+            : '⚠️ Невірний формат. Введи час у форматі ГГ:ХХ.';
     return panel.update(ctx, userId, `${error}\n\n${reprompt}`, CANCEL_KEYBOARD);
   }
 
@@ -438,6 +659,22 @@ export async function handleScheduleTextStep(ctx: Context, userId: number, text:
     // Lands back on the rating sub-screen, not the main summary — unlike reminder/deadline (whose
     // wizards are entered directly from the summary), this one is entered from its own sub-screen.
     await renderRatingScreen(ctx, userId, state.chatId);
+    return true;
+  }
+
+  if (state.flow === 'timeslot_times' && state.step === 'add') {
+    if (!isValidTime(text)) {
+      await panel.update(ctx, userId, '⚠️ Невірний формат. Введи час у форматі ГГ:ХХ, напр. 20:00', CANCEL_KEYBOARD);
+      return true;
+    }
+    if (state.times.includes(text)) {
+      await panel.update(ctx, userId, '⚠️ Цей час вже є в списку. Введи інший.', CANCEL_KEYBOARD);
+      return true;
+    }
+
+    const times = [...state.times, text].sort();
+    setScheduleEditStateWithTTL(userId, { flow: 'timeslot_times', step: 'list', chatId: state.chatId, times });
+    await renderTimeSlotTimesScreen(ctx, userId, times);
     return true;
   }
 

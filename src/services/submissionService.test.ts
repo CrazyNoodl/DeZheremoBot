@@ -22,6 +22,7 @@ import {
   unblockUserFromGroup,
 } from './submissionService.js';
 import { getHistoricalSubmitters } from '../storage/history.js';
+import { addOrUpdateTimeSlotResponse, getTimeSlotResponse } from '../storage/timeSlotResponses.js';
 
 const DEZHEROMA_LINK = 'https://www.instagram.com/dezheroma';
 const PUZATA_HATA_LINK = 'https://www.instagram.com/puzatahata';
@@ -330,4 +331,29 @@ test('resetWeek clears submissions and unlocks the chat', () => {
 
   assert.equal(getAllSubmissions(-9010).length, 0);
   assert.equal(isSubmissionLocked(-9010), false);
+});
+
+test('blockUserFromGroup also drops the user\'s time-slot poll answer for that chat', () => {
+  addOrUpdateTimeSlotResponse(-9040, 1, { days: [6], daysAny: false, times: [], timesAny: false });
+
+  blockUserFromGroup(-9040, 1, 'artem', 999);
+
+  assert.equal(getTimeSlotResponse(-9040, 1), undefined);
+});
+
+test('resetWeek clears time-slot poll answers for that chat', () => {
+  addOrUpdateTimeSlotResponse(-9041, 1, { days: [6], daysAny: false, times: [], timesAny: false });
+
+  resetWeek(-9041);
+
+  assert.equal(getTimeSlotResponse(-9041, 1), undefined);
+});
+
+test('declinePlace also drops the user\'s time-slot poll answer for that chat', () => {
+  submitPlace(-9042, 1, 'artem', FIRST_PLACE_LINK);
+  addOrUpdateTimeSlotResponse(-9042, 1, { days: [6], daysAny: false, times: [], timesAny: false });
+
+  declinePlace(-9042, 1, 'artem');
+
+  assert.equal(getTimeSlotResponse(-9042, 1), undefined);
 });

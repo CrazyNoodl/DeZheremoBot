@@ -13,12 +13,15 @@ export interface GroupScheduleConfig {
   drawTime: string; // "HH:MM", must be > lockTime same day
   ratingSurveyWeekday: number; // 0-6, day the rating survey goes out on
   ratingSurveyTime: string; // "HH:MM"
+  timeSlotPollWeekdays: number[]; // 0-6, min 1 max 7 — days offered on the availability poll's day screen
+  timeSlotPollTimes: string[]; // "HH:MM", 0 to 5 entries — hour screen is skipped entirely when empty
 }
 
-// Whether the survey is sent at all (ratingSurveyEnabled) deliberately isn't a field here — it
-// lives in storage/ratingSurveyState.ts instead, alongside chat_pauses, specifically so
-// resetGroupSchedule below doesn't also silently re-enable/disable it as a side effect of
-// resetting the day/time (see "Post-draw rating survey" in CLAUDE.md).
+// Whether the survey/poll is sent/offered at all (ratingSurveyEnabled, and the experimental
+// time-slot poll's own enabled flag) deliberately isn't a field here — those live in
+// storage/ratingSurveyState.ts / storage/timeSlotPollState.ts instead, alongside chat_pauses,
+// specifically so resetGroupSchedule below doesn't also silently re-enable/disable them as a side
+// effect of resetting the day/time (see "Post-draw rating survey" in CLAUDE.md).
 export const DEFAULT_SCHEDULE: GroupScheduleConfig = {
   reminderWeekdays: [1, 3, 5], // Mon/Wed/Fri
   reminderTime: '10:00',
@@ -27,6 +30,8 @@ export const DEFAULT_SCHEDULE: GroupScheduleConfig = {
   drawTime: '18:15',
   ratingSurveyWeekday: 0, // Sunday
   ratingSurveyTime: '15:00',
+  timeSlotPollWeekdays: [6, 0], // Sat/Sun — after a typical Friday deadline
+  timeSlotPollTimes: ['10:00', '10:30', '11:00'],
 };
 
 function load(): Record<string, GroupScheduleConfig> {

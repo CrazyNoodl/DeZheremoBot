@@ -14,7 +14,10 @@ export type AdminAction =
   | 'edit_deadline'
   | 'rating_toggle'
   | 'edit_rating'
-  | 'send_rating_survey';
+  | 'send_rating_survey'
+  | 'edit_timeslot_days'
+  | 'edit_timeslot_times'
+  | 'toggle_timeslot_poll';
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS admin_actions (

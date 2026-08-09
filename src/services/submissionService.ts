@@ -9,6 +9,7 @@ import { getLatestDraw, recordDraw as persistDraw } from '../storage/history.js'
 import { isLocked, lock, unlock } from '../storage/lockState.js';
 import { isPaused, pause, resume } from '../storage/pauseState.js';
 import { msSinceLastSubmit, recordSubmitTime } from '../storage/rateLimit.js';
+import { clearTimeSlotResponses, removeTimeSlotResponse } from '../storage/timeSlotResponses.js';
 import {
   addDecline,
   addSubmission,
@@ -130,6 +131,10 @@ export function declinePlace(chatId: number, userId: number, username: string): 
   }
 
   addDecline(chatId, userId, username);
+  // A decliner isn't attending, so their availability answer (if any) shouldn't keep counting
+  // toward the winner-announcement suggestion, nor block being re-offered the poll after a later
+  // resubmit — same reasoning as blockUserFromGroup dropping it.
+  removeTimeSlotResponse(chatId, userId);
   return { ok: true, declined: true, previousPlace };
 }
 
@@ -180,10 +185,13 @@ export function isUserBlocked(chatId: number, userId: number): boolean {
 }
 
 // Drops the user's current-week submission along with blocking them — a blocked user shouldn't
-// keep a live entry in the draw pool just because they submitted before being blocked.
+// keep a live entry in the draw pool just because they submitted before being blocked. Their
+// availability-poll answer (if any) is dropped the same way, for the identical reason: it
+// shouldn't keep influencing that week's day/time suggestion either.
 export function blockUserFromGroup(chatId: number, userId: number, username: string | undefined, blockedBy: number): void {
   blockUser(chatId, userId, username, blockedBy);
   removeSubmission(chatId, userId);
+  removeTimeSlotResponse(chatId, userId);
 }
 
 export function unblockUserFromGroup(chatId: number, userId: number): void {
@@ -210,6 +218,9 @@ export function resetWeek(chatId: number): void {
   // A fresh week means nothing left over from the last one — without this, a decline remembered
   // two weeks ago could resurface as a quick-pick option in a week that never touched it.
   clearDeclinedPlacesForChat(chatId);
+  // Same reasoning: a stale availability answer from a week that's already over shouldn't be
+  // offered back on reopening the picker, nor keep counting toward next week's suggestion.
+  clearTimeSlotResponses(chatId);
 }
 
 // Whether this winner's place is the same as the chat's previous draw — used to flag a back-to-back

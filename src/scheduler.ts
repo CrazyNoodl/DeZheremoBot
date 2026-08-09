@@ -9,6 +9,7 @@ import { getKyivNow } from './utils/kyivTime.js';
 import { getRatingSurveyContext, isRatingSurveyEnabled } from './services/ratingService.js';
 import { getNonSubmittersInfo } from './services/reminderService.js';
 import { getFinalReminderWeekday, getFirstReminderWeekday } from './services/scheduleService.js';
+import { getTimeSlotSuggestion } from './services/timeSlotPollService.js';
 import {
   isGroupPaused,
   isRepeatWinner,
@@ -174,6 +175,9 @@ export function runSchedulerTick(bot: Telegraf, now: { weekday: number; time: st
         // Computed before recordDraw persists this draw — afterward getLatestDraw would return the
         // draw just recorded instead of the previous week's, always reporting a "repeat".
         const isRepeat = isRepeatWinner(chatId, winner);
+        // Computed before resetWeek clears this week's time_slot_responses — same "read before the
+        // reset wipes it" reasoning as isRepeat/recordDraw's own listSubmissions read.
+        const timeSlotSuggestion = getTimeSlotSuggestion(chatId);
         recordDraw(chatId, winner);
         // resetWeek runs synchronously, right after recordDraw and before the network call below —
         // not chained off sendToChat's promise. Gating the reset on the send meant a crash during
@@ -181,7 +185,7 @@ export function runSchedulerTick(bot: Telegraf, now: { weekday: number; time: st
         // 'draw' done for today) until the following week's draw. Unlocking is local, durable state;
         // the announcement is best-effort UI feedback and can safely fail independently.
         resetWeek(chatId);
-        sendToChat(bot.telegram, chatId, buildDrawAnnouncement(winner, isRepeat), { parse_mode: 'HTML' });
+        sendToChat(bot.telegram, chatId, buildDrawAnnouncement(winner, isRepeat, timeSlotSuggestion), { parse_mode: 'HTML' });
       }
     }
 

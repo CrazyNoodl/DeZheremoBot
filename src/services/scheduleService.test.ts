@@ -12,10 +12,13 @@ const {
   getFirstReminderWeekday,
   getSchedule,
   isValidTime,
+  MAX_TIME_SLOTS,
   resetSchedule,
   updateDeadlineSchedule,
   updateRatingSurveySchedule,
   updateReminderSchedule,
+  updateTimeSlotPollTimes,
+  updateTimeSlotPollWeekdays,
 } = await import('./scheduleService.js');
 const { DEFAULT_SCHEDULE } = await import('../storage/groupSchedules.js');
 
@@ -51,10 +54,12 @@ test('updateDeadlineSchedule rejects drawTime <= lockTime', () => {
 });
 
 test('updateDeadlineSchedule applies a valid change', () => {
-  const result = updateDeadlineSchedule(-8004, 6, '17:00', '17:30');
+  // Weekday 2 (Tue), not 6/0 — those are DEFAULT_SCHEDULE's own timeSlotPollWeekdays, which would
+  // otherwise trip the new deadline/timeslot-poll conflict check for a test that isn't about that.
+  const result = updateDeadlineSchedule(-8004, 2, '17:00', '17:30');
 
   assert.deepEqual(result, { ok: true });
-  assert.deepEqual(getSchedule(-8004), { ...DEFAULT_SCHEDULE, deadlineWeekday: 6, lockTime: '17:00', drawTime: '17:30' });
+  assert.deepEqual(getSchedule(-8004), { ...DEFAULT_SCHEDULE, deadlineWeekday: 2, lockTime: '17:00', drawTime: '17:30' });
 });
 
 test('resetSchedule reverts an override back to DEFAULT_SCHEDULE', () => {
@@ -135,4 +140,56 @@ test('updateRatingSurveySchedule applies a valid change', () => {
 
   assert.deepEqual(result, { ok: true });
   assert.deepEqual(getSchedule(-8010), { ...DEFAULT_SCHEDULE, ratingSurveyWeekday: 3, ratingSurveyTime: '16:30' });
+});
+
+test('updateTimeSlotPollWeekdays rejects a list that includes the current deadline day', () => {
+  // DEFAULT_SCHEDULE's deadlineWeekday is Friday (5).
+  const result = updateTimeSlotPollWeekdays(-8011, [5, 6]);
+
+  assert.deepEqual(result, { ok: false, reason: 'timeslot_deadline_conflict' });
+  assert.deepEqual(getSchedule(-8011), DEFAULT_SCHEDULE);
+});
+
+test('updateTimeSlotPollWeekdays applies a valid change', () => {
+  const result = updateTimeSlotPollWeekdays(-8012, [6, 0, 1]);
+
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(getSchedule(-8012), { ...DEFAULT_SCHEDULE, timeSlotPollWeekdays: [6, 0, 1] });
+});
+
+test('updateDeadlineSchedule rejects moving the deadline onto a day already configured for the time-slot poll', () => {
+  updateTimeSlotPollWeekdays(-8013, [6, 0]);
+
+  const result = updateDeadlineSchedule(-8013, 6, '18:00', '18:15');
+
+  assert.deepEqual(result, { ok: false, reason: 'timeslot_deadline_conflict' });
+  assert.deepEqual(getSchedule(-8013), { ...DEFAULT_SCHEDULE, timeSlotPollWeekdays: [6, 0] });
+});
+
+test('updateDeadlineSchedule allows moving the deadline to a day not in the time-slot poll config', () => {
+  updateTimeSlotPollWeekdays(-8014, [6, 0]);
+
+  const result = updateDeadlineSchedule(-8014, 3, '18:00', '18:15');
+
+  assert.deepEqual(result, { ok: true });
+});
+
+test('updateTimeSlotPollTimes rejects an invalid time format', () => {
+  const result = updateTimeSlotPollTimes(-8015, ['10:00', 'nope']);
+
+  assert.deepEqual(result, { ok: false, reason: 'invalid_time' });
+  assert.deepEqual(getSchedule(-8015), DEFAULT_SCHEDULE);
+});
+
+test('updateTimeSlotPollTimes rejects more than MAX_TIME_SLOTS entries', () => {
+  const result = updateTimeSlotPollTimes(-8016, Array.from({ length: MAX_TIME_SLOTS + 1 }, (_, i) => `${10 + i}:00`));
+
+  assert.deepEqual(result, { ok: false, reason: 'too_many_time_slots' });
+});
+
+test('updateTimeSlotPollTimes accepts an empty list (hour screen skipped entirely)', () => {
+  const result = updateTimeSlotPollTimes(-8017, []);
+
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(getSchedule(-8017).timeSlotPollTimes, []);
 });

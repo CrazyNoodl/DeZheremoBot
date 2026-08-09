@@ -25,6 +25,8 @@ const { getRatingSelection } = await import('../storage/ratingSelectionState.js'
 const { isRatingSurveyEnabled } = await import('../services/ratingService.js');
 const { getLatestDraw } = await import('../storage/history.js');
 const { addOrUpdateRating, markAsAbsent } = await import('../storage/placeRatings.js');
+const { isTimeSlotPollEnabled, setTimeSlotPollEnabled } = await import('../services/timeSlotPollService.js');
+const { addOrUpdateTimeSlotResponse } = await import('../storage/timeSlotResponses.js');
 
 function fakeCtx(status: string, userId: number) {
   const alerts: string[] = [];
@@ -787,6 +789,7 @@ test('handleAdminAction "experimental" shows a statistics entry and a back butto
   assert.equal(replies.some((r) => /Експериментальні функції/.test(r)), true);
   assert.deepEqual(replyButtonTexts[0], [
     '📊 Статистика',
+    '🗓 Опитування про час',
     '🩺 Діагностика планувальника',
     '📜 Лог дій адмінів',
     '‹ Назад',
@@ -979,4 +982,73 @@ test('handleAdminAction refuses "auditlog" for a demoted admin', async () => {
 
   assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
   assert.equal(replies.length, 0);
+});
+
+test('handleAdminAction "timeslot" shows the disabled-by-default state and a back button', async () => {
+  const userId = 30050;
+  const chatId = -30050;
+
+  const { ctx, rawCtx, replies, replyButtons } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:timeslot:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(replies.some((r) => /Опитування про доступність/.test(r) && /Стан: вимкнено/.test(r)), true);
+  const backButton = replyButtons[0]?.find((b) => b.text === '‹ Назад');
+  assert.equal(backButton?.callback_data, `admin:experimental:${chatId}`);
+});
+
+test('a current admin tapping "timeslot_toggle" flips the flag and logs it', async () => {
+  const userId = 30051;
+  const chatId = -30051;
+  assert.equal(isTimeSlotPollEnabled(chatId), false); // starts at the default (disabled)
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:timeslot_toggle:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(isTimeSlotPollEnabled(chatId), true);
+  assert.equal(listAdminActions(chatId)[0]?.action, 'toggle_timeslot_poll');
+  assert.equal(listAdminActions(chatId)[0]?.detail, 'on');
+  assert.equal(replies.some((r) => /Стан: увімкнено/.test(r)), true); // re-renders the screen with the new state
+});
+
+test('handleAdminAction refuses "timeslot_toggle" for a demoted admin and leaves the flag untouched', async () => {
+  const userId = 30052;
+  const chatId = -30052;
+
+  const { ctx, rawCtx, alerts } = fakeCtx('member', userId);
+  withCallbackData(rawCtx, `admin:timeslot_toggle:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
+  assert.equal(isTimeSlotPollEnabled(chatId), false);
+  assert.deepEqual(listAdminActions(chatId), []);
+});
+
+test('handleAdminAction "draw" appends a day/time suggestion when the poll is enabled and answered', async () => {
+  const userId = 30053;
+  const chatId = -30053;
+  setTimeSlotPollEnabled(chatId, true);
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/somewhere');
+  // Default timeSlotPollWeekdays is [6, 0] (Sat/Sun) — vote for Saturday.
+  addOrUpdateTimeSlotResponse(chatId, 1, { days: [6], daysAny: false, times: ['10:00'], timesAny: false });
+
+  const { ctx, rawCtx, sentMessages } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:draw:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.match(sentMessages[0].text, /Як щодо суботи о 10:00 — вам підходить\?/);
+});
+
+test('handleAdminAction "draw" omits the suggestion line when the poll is disabled', async () => {
+  const userId = 30054;
+  const chatId = -30054;
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/somewhere');
+  addOrUpdateTimeSlotResponse(chatId, 1, { days: [6], daysAny: false, times: ['10:00'], timesAny: false });
+
+  const { ctx, rawCtx, sentMessages } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:draw:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(/Як щодо/.test(sentMessages[0].text), false);
 });

@@ -2,6 +2,9 @@ import { escapeHtml, placeLink } from '../utils/htmlFormat.js';
 import { getKyivNow } from '../utils/kyivTime.js';
 import type { HistoricalSubmitter } from '../storage/history.js';
 import type { Submission } from '../storage/store.js';
+// Type-only import — erased at compile time, so this doesn't create a real runtime dependency on
+// services/ from messaging/ (the shape is just data: { day, time? }).
+import type { TimeSlotSuggestion } from '../services/timeSlotPollService.js';
 
 // Shared by scheduler.ts's own draw branch and admin.ts's "force draw now" action, so a manual
 // draw's group announcement stays byte-identical to a scheduled one (see "Admin controls" in
@@ -74,23 +77,44 @@ const THANKS_LINE_POOL: readonly ((user: string) => string)[] = [
   (user) => `(смачного вибору, <b>${user}</b>!)`,
 ];
 
+// Lowercase weekday names in genitive case ("як щодо суботи", not "як щодо субота"), for the
+// natural-language suggestion sentence below — distinct from the short "Сб"/"Нд" abbreviations
+// /schedule and /admin use in their compact summary screens, since this reads as a sentence in a
+// group announcement instead.
+const WEEKDAY_NAMES_GENITIVE = ['неділі', 'понеділка', 'вівторка', 'середи', 'четверга', "п'ятниці", 'суботи'];
+
+// A single day + hour suggestion (services/timeSlotPollService.ts's getTimeSlotSuggestion), not a
+// ranked list — a lightweight nudge, not a vote tally. Only ever appended alongside an actual
+// winner (there's nothing to suggest a visit time for when nobody submitted a place).
+function buildTimeSlotSuggestionLine(suggestion: TimeSlotSuggestion): string {
+  const timePart = suggestion.time ? ` о ${suggestion.time}` : '';
+  return `\n📅 Як щодо ${WEEKDAY_NAMES_GENITIVE[suggestion.day]}${timePart} — вам підходить?`;
+}
+
 // isRepeatWinner (services/submissionService.ts) must be computed before recordDraw persists the
-// new draw, then passed straight through here — see that function's own comment for why.
-export function buildDrawAnnouncement(winner: Submission | undefined, isRepeatWinner = false): string {
+// new draw, then passed straight through here — see that function's own comment for why. Same
+// "read before resetWeek clears it" reasoning applies to timeSlotSuggestion (getTimeSlotSuggestion
+// must run before resetWeek clears that week's time_slot_responses).
+export function buildDrawAnnouncement(
+  winner: Submission | undefined,
+  isRepeatWinner = false,
+  timeSlotSuggestion?: TimeSlotSuggestion,
+): string {
   if (!winner) {
     return `${pickRandomEmoji(NOBODY_SUBMITTED_EMOJI)} Цього тижня всі мовчали... наступного разу точно хтось запропонує щось смачне!`;
   }
 
   const thanksLine = pickRandom(THANKS_LINE_POOL)(escapeHtml(winner.username));
+  const suggestionLine = timeSlotSuggestion ? buildTimeSlotSuggestionLine(timeSlotSuggestion) : '';
 
   if (isRepeatWinner) {
     return (
       `${pickRandomEmoji(REPEAT_WINNER_EMOJI)} ДеЖеремо цього тижня: ${placeLink(winner.place)} — знову?! ` +
-      `Два тижні поспіль, доля явно щось знає 👀\n${thanksLine}`
+      `Два тижні поспіль, доля явно щось знає 👀\n${thanksLine}${suggestionLine}`
     );
   }
 
-  return `${pickRandomEmoji(WINNER_EMOJI)} ДеЖеремо цього тижня: ${placeLink(winner.place)}!\n${thanksLine}`;
+  return `${pickRandomEmoji(WINNER_EMOJI)} ДеЖеремо цього тижня: ${placeLink(winner.place)}!\n${thanksLine}${suggestionLine}`;
 }
 
 // Ukrainian noun agreement for a count of people: 1 → людина, 2-4 → людини, 5+ (and the

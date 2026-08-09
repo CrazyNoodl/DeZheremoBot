@@ -139,3 +139,32 @@ test('clearScheduleEditState makes getScheduleEditState return undefined again',
 test('clearScheduleEditState on a user never set does not throw', () => {
   assert.doesNotThrow(() => clearScheduleEditState(21011));
 });
+
+test('round-trips a timeslot_days state, including the Set', () => {
+  const userId = 21012;
+  setScheduleEditState(userId, { flow: 'timeslot_days', chatId: -21012, selected: new Set([6, 0]) });
+
+  const state = getScheduleEditState(userId);
+  assert.ok(state?.flow === 'timeslot_days');
+  if (state?.flow === 'timeslot_days') {
+    assert.equal(state.chatId, -21012);
+    assert.equal(state.selected.has(6), true);
+    assert.equal(state.selected.has(0), true);
+    assert.equal(state.selected.size, 2);
+  }
+});
+
+test('round-trips a timeslot_times/list and /add state', () => {
+  const userId = 21013;
+  setScheduleEditState(userId, { flow: 'timeslot_times', step: 'list', chatId: -21013, times: ['10:00'] });
+
+  let state = getScheduleEditState(userId);
+  assert.ok(state?.flow === 'timeslot_times' && state.step === 'list');
+
+  setScheduleEditState(userId, { flow: 'timeslot_times', step: 'add', chatId: -21013, times: ['10:00'] });
+  state = getScheduleEditState(userId);
+  assert.ok(state?.flow === 'timeslot_times' && state.step === 'add');
+  if (state?.flow === 'timeslot_times' && state.step === 'add') {
+    assert.deepEqual(state.times, ['10:00']);
+  }
+});

@@ -39,6 +39,34 @@ test('buildDrawAnnouncement reports nobody submitted when there is no winner', (
   assert.match(text, /Цього тижня всі мовчали/);
 });
 
+test('buildDrawAnnouncement appends a day+time suggestion when one is given', () => {
+  const text = buildDrawAnnouncement(
+    { userId: 1, username: 'artem', place: PLACE_LINK, status: 'submitted' } as any,
+    false,
+    { day: 6, time: '10:00' },
+  );
+  assert.match(text, /📅 Як щодо суботи о 10:00 — вам підходить\?/);
+});
+
+test('buildDrawAnnouncement omits the time clause when the suggestion has no hour', () => {
+  const text = buildDrawAnnouncement(
+    { userId: 1, username: 'artem', place: PLACE_LINK, status: 'submitted' } as any,
+    false,
+    { day: 0, time: undefined },
+  );
+  assert.match(text, /📅 Як щодо неділі — вам підходить\?$/m);
+});
+
+test('buildDrawAnnouncement adds no suggestion line when none is given', () => {
+  const text = buildDrawAnnouncement({ userId: 1, username: 'artem', place: PLACE_LINK, status: 'submitted' } as any);
+  assert.doesNotMatch(text, /Пропозиція/);
+});
+
+test('buildDrawAnnouncement never appends a suggestion when nobody submitted', () => {
+  const text = buildDrawAnnouncement(undefined, false, { day: 6, time: '10:00' });
+  assert.doesNotMatch(text, /Пропозиція/);
+});
+
 test('buildFinalReminderExtra reports "all done" when nobody is left to tag', () => {
   const text = buildFinalReminderExtra([], 0);
   assert.match(text, /Усі вже встигли/);

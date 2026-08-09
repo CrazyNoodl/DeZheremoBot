@@ -24,6 +24,8 @@ const {
   submitPlace,
 } = await import('./services/submissionService.js');
 const { setRatingSurveyEnabled } = await import('./services/ratingService.js');
+const { setTimeSlotPollEnabled } = await import('./services/timeSlotPollService.js');
+const { addOrUpdateTimeSlotResponse } = await import('./storage/timeSlotResponses.js');
 
 function fakeBot(chatMembersCount = 0) {
   const sentMessages: Array<{ chatId: number; text: string }> = [];
@@ -86,6 +88,8 @@ test('a plain reminder fires once reminderTime has passed and marks it fired for
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   const { bot, sentMessages } = fakeBot();
 
@@ -112,6 +116,8 @@ test('a reminder does not fire twice for the same calendar day', async () => {
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   const { bot, sentMessages } = fakeBot();
 
@@ -134,6 +140,8 @@ test('the reminder closest to the deadline is tagged with the non-submitter extr
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   const { bot, sentMessages } = fakeBot(2); // 2 known members, nobody has ever submitted in this chat
 
@@ -172,6 +180,8 @@ test('the first reminder of the week gets the opening text instead of "Хто щ
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   const { bot, sentMessages } = fakeBot();
 
@@ -195,6 +205,8 @@ test('a middle reminder (neither first nor final) keeps the "Хто ще не в
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   const { bot, sentMessages } = fakeBot();
 
@@ -219,6 +231,8 @@ test('with only one reminder configured it keeps the "Хто ще не всти�
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   const { bot, sentMessages } = fakeBot(1);
 
@@ -243,6 +257,8 @@ test('a reminder only fires for chats whose own schedule actually matches the ti
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   setGroupSchedule(nonMatching, {
     reminderWeekdays: [3],
@@ -252,6 +268,8 @@ test('a reminder only fires for chats whose own schedule actually matches the ti
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   const { bot, sentMessages } = fakeBot();
 
@@ -275,6 +293,8 @@ test('lockTime passing locks submissions for that chat and marks it fired', () =
     drawTime: '23:59',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   submitPlace(chatId, 30001, 'tester', 'https://www.instagram.com/somewhere');
   const { bot } = fakeBot();
@@ -298,6 +318,8 @@ test('drawTime passing with a submission picks a winner, records history, resets
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
   const { bot, sentMessages } = fakeBot();
@@ -313,6 +335,59 @@ test('drawTime passing with a submission picks a winner, records history, resets
   assert.match(mine[0].text, /somewhere/);
 });
 
+test('drawTime passing appends a day/time suggestion when the poll is enabled and answered', async () => {
+  const chatId = -24071;
+  const userId = 30071;
+  addGroupChat(chatId, 'Test Group');
+  setGroupSchedule(chatId, {
+    reminderWeekdays: [],
+    reminderTime: '10:00',
+    deadlineWeekday: 5,
+    lockTime: '18:00',
+    drawTime: '18:15',
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
+  });
+  setTimeSlotPollEnabled(chatId, true);
+  submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
+  addOrUpdateTimeSlotResponse(chatId, userId, { days: [6], daysAny: false, times: ['10:00'], timesAny: false });
+  const { bot, sentMessages } = fakeBot();
+
+  runSchedulerTick(bot, { weekday: 5, time: '18:15', date: '2026-08-21' });
+  await flush();
+
+  const mine = messagesFor(sentMessages, chatId);
+  assert.match(mine[0].text, /Як щодо суботи о 10:00 — вам підходить\?/);
+});
+
+test('drawTime passing omits the suggestion line when the poll is disabled', async () => {
+  const chatId = -24072;
+  const userId = 30072;
+  addGroupChat(chatId, 'Test Group');
+  setGroupSchedule(chatId, {
+    reminderWeekdays: [],
+    reminderTime: '10:00',
+    deadlineWeekday: 5,
+    lockTime: '18:00',
+    drawTime: '18:15',
+    ratingSurveyWeekday: 0,
+    ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
+  });
+  submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
+  addOrUpdateTimeSlotResponse(chatId, userId, { days: [6], daysAny: false, times: ['10:00'], timesAny: false });
+  const { bot, sentMessages } = fakeBot();
+
+  runSchedulerTick(bot, { weekday: 5, time: '18:15', date: '2026-08-21' });
+  await flush();
+
+  const mine = messagesFor(sentMessages, chatId);
+  assert.equal(/Як щодо/.test(mine[0].text), false);
+});
+
 test('drawTime passing with no submissions announces "nobody submitted" instead of a place', async () => {
   const chatId = -24008;
   addGroupChat(chatId, 'Test Group');
@@ -324,6 +399,8 @@ test('drawTime passing with no submissions announces "nobody submitted" instead 
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   const { bot, sentMessages } = fakeBot();
 
@@ -347,6 +424,8 @@ test('a draw does not fire twice for the same calendar day', async () => {
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
   const { bot, sentMessages } = fakeBot();
@@ -371,6 +450,8 @@ test('the rating survey fires on its own configured day/time and DMs each submit
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
   const { bot, sentMessages } = fakeBot();
@@ -398,6 +479,8 @@ test('the rating survey does not fire when disabled', async () => {
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   setRatingSurveyEnabled(chatId, false); // now a separate live-cycle flag, not part of GroupScheduleConfig
   submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
@@ -423,6 +506,8 @@ test('the rating survey marks fired but sends nothing when the latest draw had n
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   const { bot, sentMessages } = fakeBot();
 
@@ -447,6 +532,8 @@ test('a paused chat still marks the rating survey fired but skips sending it', a
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
   const { bot, sentMessages } = fakeBot();
@@ -474,6 +561,8 @@ test('the rating survey does not fire twice for the same calendar day', async ()
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
   const { bot, sentMessages } = fakeBot();
@@ -501,6 +590,8 @@ test('the rating survey does not DM a submitter who was blocked after that week\
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   submitPlace(chatId, submitterUserId, 'tester', 'https://www.instagram.com/somewhere');
   submitPlace(chatId, blockedUserId, 'tester2', 'https://www.instagram.com/elsewhere');
@@ -530,6 +621,8 @@ test('a paused chat still marks reminder/lock/draw fired for today but skips the
     drawTime: '18:15',
     ratingSurveyWeekday: 0,
     ratingSurveyTime: '15:00',
+    timeSlotPollWeekdays: [6, 0],
+    timeSlotPollTimes: ['10:00'],
   });
   submitPlace(chatId, userId, 'tester', 'https://www.instagram.com/somewhere');
   pauseGroup(chatId);
