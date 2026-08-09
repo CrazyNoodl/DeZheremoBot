@@ -1,4 +1,6 @@
-import type { Context } from 'telegraf';
+import * as Sentry from '@sentry/node';
+import { Markup, type Context } from 'telegraf';
+import { safeAnswerCbQuery } from './panel.js';
 
 interface ReleaseNote {
   version: string;
@@ -117,11 +119,39 @@ function buildReleaseNoteBlock(note: ReleaseNote): string {
   return `<b>${note.version}</b> — ${note.title} <i>(${note.date})</i>\n${sections}`;
 }
 
-function buildReleaseNotesText(): string {
+const RELEASE_NOTES_HEADER = '🗒 <b>Історія оновлень ДеЖеремоБота</b>';
+
+export const RELEASE_NOTES_ACTION_PREFIX = 'relnotes:';
+
+interface ReleaseNotesPage {
+  text: string;
+  page: number;
+  totalPages: number;
+}
+
+// One version per page rather than a char-budget-packed page: the whole history no longer fits in
+// a single Telegram message (4096 chars) now that there are several releases, and a version is
+// already the natural, self-contained unit this file's changelog is written in — no reason to split
+// or merge across that boundary the way a fixed-item-count page (like /admin's audit log) would.
+function buildReleaseNotesPage(requestedPage: number): ReleaseNotesPage {
   // Newest first — that's the order a changelog reader actually wants, even though the array above
   // is stored oldest-first so it also reads as a plain chronological history in source.
-  const blocks = [...RELEASE_NOTES].reverse().map(buildReleaseNoteBlock);
-  return `🗒 <b>Історія оновлень ДеЖеремоБота</b>\n\n${blocks.join('\n')}`;
+  const blocks = [...RELEASE_NOTES].reverse();
+  const totalPages = blocks.length;
+  const page = Math.min(Math.max(requestedPage, 0), totalPages - 1);
+  const text = `${RELEASE_NOTES_HEADER} (стор. ${page + 1}/${totalPages})\n\n${buildReleaseNoteBlock(blocks[page])}`;
+  return { text, page, totalPages };
+}
+
+// Same '‹ Новіші' / 'Старіші ›' wording and page-0-is-newest convention as /admin's audit log
+// (commands/admin.ts's buildAuditLogKeyboard), for the same "older releases are further back" feel.
+function buildReleaseNotesKeyboard(page: number, totalPages: number) {
+  const navRow: ReturnType<typeof Markup.button.callback>[] = [];
+  if (page > 0) navRow.push(Markup.button.callback('‹ Новіші', `${RELEASE_NOTES_ACTION_PREFIX}${page - 1}`));
+  if (page < totalPages - 1) {
+    navRow.push(Markup.button.callback('Старіші ›', `${RELEASE_NOTES_ACTION_PREFIX}${page + 1}`));
+  }
+  return Markup.inlineKeyboard(navRow.length > 0 ? [navRow] : []);
 }
 
 // Only replies in a private chat with the bot — typed in a group it's silently ignored, same as
@@ -129,5 +159,37 @@ function buildReleaseNotesText(): string {
 export async function handleReleaseNotesCommand(ctx: Context): Promise<void> {
   if (ctx.chat?.type !== 'private') return;
 
-  await ctx.reply(buildReleaseNotesText(), { parse_mode: 'HTML' });
+  const { text, page, totalPages } = buildReleaseNotesPage(0);
+  await ctx.reply(text, { parse_mode: 'HTML', ...buildReleaseNotesKeyboard(page, totalPages) });
+}
+
+// No membership/staleness re-check needed, same reasoning as rating.ts's handleRateAction: this is
+// always a 1:1 private chat with the tapping user (release notes carry nothing group-specific), and
+// re-paging is idempotent, so there's no cross-user surface and no stale-state bug a second tap
+// could trigger.
+export async function handleReleaseNotesAction(ctx: Context): Promise<void> {
+  const query = ctx.callbackQuery;
+  const data = query && 'data' in query ? query.data : undefined;
+  const message = query && 'message' in query ? query.message : undefined;
+
+  if (!data || !message) {
+    if (query) await safeAnswerCbQuery(ctx);
+    return;
+  }
+
+  const requestedPage = Number(data.slice(RELEASE_NOTES_ACTION_PREFIX.length));
+  const { text, page, totalPages } = buildReleaseNotesPage(requestedPage);
+  const keyboard = buildReleaseNotesKeyboard(page, totalPages);
+
+  await safeAnswerCbQuery(ctx);
+
+  try {
+    await ctx.telegram.editMessageText(message.chat.id, message.message_id, undefined, text, {
+      parse_mode: 'HTML',
+      ...keyboard,
+    });
+  } catch (err) {
+    console.warn(`[releasenotes] failed to edit release notes page for user ${ctx.from?.id}:`, err);
+    Sentry.captureException(err);
+  }
 }
