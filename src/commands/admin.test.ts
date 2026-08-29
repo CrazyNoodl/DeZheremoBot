@@ -485,6 +485,129 @@ test('handleAdminAction "rating_send" with a stale/empty selection shows an aler
   assert.deepEqual(listAdminActions(chatId).map((e) => e.action), ['draw']);
 });
 
+test('handleAdminAction "rating_place" with no completed draw yet shows nothing to change', async () => {
+  const userId = 30060;
+  const chatId = -30060;
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:rating_place:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(replies.some((r) => /нема що змінювати/.test(r)), true);
+});
+
+test('handleAdminAction "rating_place" after a draw lists that week\'s submitters, none checked yet', async () => {
+  const userId = 30061;
+  const chatId = -30061;
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/somewhere');
+  submitPlace(chatId, 2, 'olya', 'https://www.instagram.com/elsewhere');
+
+  const { ctx: drawCtx, rawCtx: drawRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx);
+
+  const { ctx, rawCtx, replies, replyButtonTexts } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:rating_place:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(replies.some((r) => /Куди пішли по факту/.test(r)), true);
+  assert.equal(replies.some((r) => /змінено вручну/.test(r)), false);
+  assert.equal(replyButtonTexts[0]?.some((label) => label.includes('artem') && label.startsWith('◻️')), true);
+  assert.equal(replyButtonTexts[0]?.some((label) => label.includes('olya') && label.startsWith('◻️')), true);
+  assert.equal(replyButtonTexts[0]?.some((label) => /Скинути/.test(label)), false); // nothing overridden yet
+});
+
+test('handleAdminAction "rating_place_set" redirects the survey to that submitter\'s place and logs it', async () => {
+  const userId = 30062;
+  const chatId = -30062;
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/somewhere');
+  submitPlace(chatId, 2, 'olya', 'https://www.instagram.com/elsewhere');
+
+  const { ctx: drawCtx, rawCtx: drawRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx);
+
+  const { ctx, rawCtx, replies, replyButtonTexts } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:rating_place_set:${chatId}:2`);
+  await handleAdminAction(ctx);
+
+  assert.equal(replies.some((r) => /змінено вручну/.test(r)), true);
+  assert.equal(replyButtonTexts[0]?.some((label) => label.includes('olya') && label.startsWith('✅')), true);
+  assert.equal(replyButtonTexts[0]?.some((label) => /Скинути/.test(label)), true);
+
+  const entries = listAdminActions(chatId);
+  assert.deepEqual(entries.map((e) => e.action), ['draw', 'override_rating_place']);
+  assert.equal(entries[1].detail, 'target:2');
+
+  // The redirected place is what the actual survey send now uses too.
+  const { ctx: sendCtx, rawCtx: sendRawCtx, sentMessages } = fakeCtx('administrator', userId);
+  withCallbackData(sendRawCtx, `admin:rating_all:${chatId}`);
+  await handleAdminAction(sendCtx);
+  assert.equal(sentMessages.some((m) => /elsewhere/.test(m.text)), true);
+});
+
+test('handleAdminAction "rating_place_set" with a stale submitter id changes nothing and logs nothing', async () => {
+  const userId = 30063;
+  const chatId = -30063;
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/somewhere');
+
+  const { ctx: drawCtx, rawCtx: drawRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx);
+
+  const { ctx, rawCtx, replies } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:rating_place_set:${chatId}:999`); // never submitted to this draw
+  await handleAdminAction(ctx);
+
+  assert.equal(replies.some((r) => /змінено вручну/.test(r)), false);
+  assert.deepEqual(listAdminActions(chatId).map((e) => e.action), ['draw']);
+});
+
+test('handleAdminAction "rating_place_reset" returns the survey to the draw winner and logs it', async () => {
+  const userId = 30064;
+  const chatId = -30064;
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/somewhere');
+  submitPlace(chatId, 2, 'olya', 'https://www.instagram.com/elsewhere');
+
+  const { ctx: drawCtx, rawCtx: drawRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx);
+
+  const { ctx: setCtx, rawCtx: setRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(setRawCtx, `admin:rating_place_set:${chatId}:2`);
+  await handleAdminAction(setCtx);
+
+  const { ctx, rawCtx, replies, replyButtonTexts } = fakeCtx('administrator', userId);
+  withCallbackData(rawCtx, `admin:rating_place_reset:${chatId}`);
+  await handleAdminAction(ctx);
+
+  assert.equal(replies.some((r) => /змінено вручну/.test(r)), false);
+  assert.equal(replyButtonTexts[0]?.some((label) => /Скинути/.test(label)), false);
+
+  const entries = listAdminActions(chatId);
+  assert.deepEqual(entries.map((e) => e.action), ['draw', 'override_rating_place', 'reset_rating_place']);
+});
+
+test('handleAdminAction refuses "rating_place"/"rating_place_set"/"rating_place_reset" for a demoted admin', async () => {
+  const userId = 30065;
+  const chatId = -30065;
+  submitPlace(chatId, 1, 'artem', 'https://www.instagram.com/somewhere');
+
+  const { ctx: drawCtx, rawCtx: drawRawCtx } = fakeCtx('administrator', userId);
+  withCallbackData(drawRawCtx, `admin:draw:${chatId}`);
+  await handleAdminAction(drawCtx);
+
+  for (const data of [`admin:rating_place:${chatId}`, `admin:rating_place_set:${chatId}:1`, `admin:rating_place_reset:${chatId}`]) {
+    const { ctx, rawCtx, alerts, replies } = fakeCtx('member', userId);
+    withCallbackData(rawCtx, data);
+    await handleAdminAction(ctx);
+
+    assert.equal(alerts.some((a) => /Лише адміни/.test(a)), true);
+    assert.equal(replies.length, 0);
+  }
+  assert.deepEqual(listAdminActions(chatId).map((e) => e.action), ['draw']); // nothing rating-place-related logged
+});
+
 test('handleAdminAction "stats_top" shows nothing-yet text when the group has never had a winning draw', async () => {
   const userId = 30023;
   const chatId = -30023;

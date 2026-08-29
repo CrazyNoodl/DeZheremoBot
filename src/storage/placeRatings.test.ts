@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { addOrUpdateRating, getPlaceRatingSummaries, getTopRaters, markAsAbsent } from './placeRatings.js';
+import { setDrawPlaceOverride } from './drawPlaceOverride.js';
 import { db, recordDraw } from './history.js';
 
 function drawIdFor(chatId: number): number {
@@ -202,5 +203,44 @@ test('getPlaceRatingSummaries sorts by average rating descending, unrated places
   assert.deepEqual(
     getPlaceRatingSummaries(chatId).map((s) => s.place),
     ['High place', 'Low place', 'Unrated place'],
+  );
+});
+
+test('getPlaceRatingSummaries attributes a vote to a manually overridden place, not the algorithmic winner', () => {
+  const chatId = -6014;
+  const drawId = drawWithTwoSubmitters(chatId); // winner_place 'Дежерьома', 'Пузата хата' also submitted
+  setDrawPlaceOverride(drawId, 'Пузата хата', 2, 999); // group actually went to the runner-up place
+  addOrUpdateRating(drawId, 1, 5);
+
+  const summaries = getPlaceRatingSummaries(chatId);
+  const dezheremo = summaries.find((s) => s.place === 'Дежерьома');
+  const puzata = summaries.find((s) => s.place === 'Пузата хата');
+
+  // The algorithmic winner still shows up (getTopWinningPlaces is untouched by overrides), but with
+  // no votes of its own — the one vote cast went to what the survey actually asked about.
+  assert.deepEqual(dezheremo, { place: 'Дежерьома', averageStars: null, ratingCount: 0, votes: [] });
+  assert.equal(puzata?.averageStars, 5);
+  assert.equal(puzata?.ratingCount, 1);
+});
+
+test('getPlaceRatingSummaries adds a synthetic wins:0 entry for an override target that never itself won a draw', () => {
+  const chatId = -6015;
+  const drawId = drawWithTwoSubmitters(chatId); // 'Пузата хата' submitted but never recorded as winner_place
+  setDrawPlaceOverride(drawId, 'Пузата хата', 2, 999);
+  addOrUpdateRating(drawId, 2, 4);
+
+  const puzata = getPlaceRatingSummaries(chatId).find((s) => s.place === 'Пузата хата');
+  assert.equal(puzata?.averageStars, 4);
+  assert.equal(puzata?.ratingCount, 1);
+});
+
+test('getPlaceRatingSummaries leaves an unoverridden draw attributed to the real winner_place as before', () => {
+  const chatId = -6016;
+  const drawId = drawWithTwoSubmitters(chatId);
+  addOrUpdateRating(drawId, 1, 3);
+
+  assert.deepEqual(
+    getPlaceRatingSummaries(chatId).map((s) => s.place),
+    ['Дежерьома'],
   );
 });

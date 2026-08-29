@@ -1,4 +1,7 @@
 import { db, getTopWinningPlaces } from './history.js';
+// Side-effect import: draw_place_overrides has to exist before placeVotesStmt below prepares a
+// query that LEFT JOINs it — import order (not require order) is what guarantees that here.
+import './drawPlaceOverride.js';
 
 // Shares history.ts's connection onto history.db (same reasoning as auditLog.ts) since this
 // references weekly_draws(id) — no reason to open a second connection onto the same file.
@@ -79,12 +82,16 @@ export interface PlaceRatingSummary {
 
 // Same join reasoning as topRatersStmt: a rating only ever goes to a draw's own submitter, so
 // joining place_ratings back to that exact (draw_id, user_id) row in submissions_history always
-// finds the username, no aggregation needed.
+// finds the username, no aggregation needed. COALESCE(dpo.place, wd.winner_place) is what makes a
+// per-draw manual override (see drawPlaceOverride.ts) redirect that draw's votes to the place the
+// group actually visited instead of the place the random draw happened to pick — a vote is always
+// attributed to whichever place this specific draw's survey actually asked about.
 const placeVotesStmt = db.prepare(`
-  SELECT wd.winner_place AS place, pr.user_id AS userId, sh.username, pr.stars, pr.rated_at AS ratedAt
+  SELECT COALESCE(dpo.place, wd.winner_place) AS place, pr.user_id AS userId, sh.username, pr.stars, pr.rated_at AS ratedAt
   FROM weekly_draws wd
   JOIN place_ratings pr ON pr.draw_id = wd.id
   JOIN submissions_history sh ON sh.draw_id = pr.draw_id AND sh.user_id = pr.user_id
+  LEFT JOIN draw_place_overrides dpo ON dpo.draw_id = wd.id
   WHERE wd.chat_id = ? AND wd.winner_place IS NOT NULL
   ORDER BY pr.rated_at DESC
 `);
@@ -97,6 +104,13 @@ const placeVotesStmt = db.prepare(`
 // votes list, instead of being invisible. Sorted by averageStars descending (unrated places last,
 // same-average ties broken by win count) — a ratings screen is more useful ranked by "was it good"
 // than by "how often did it win," which getTopWinningPlaces's own win-count order already covers.
+//
+// The roster from getTopWinningPlaces alone would miss a place that a manual survey override (see
+// drawPlaceOverride.ts) redirected votes to but that never itself won a random draw in this chat —
+// without adding it here too, those votes would be collected by placeVotesStmt but have nowhere in
+// the roster to attach to. Such a place gets a synthetic wins:0 roster entry (it's shown here
+// because it was visited and rated, not because it "won" anything — getTopWinningPlaces itself is
+// deliberately left untouched by overrides, per CLAUDE.md's "Post-draw rating survey").
 export function getPlaceRatingSummaries(chatId: number): PlaceRatingSummary[] {
   const votesByPlace = new Map<string, PlaceVote[]>();
   for (const row of placeVotesStmt.all(chatId) as unknown as {
@@ -111,7 +125,16 @@ export function getPlaceRatingSummaries(chatId: number): PlaceRatingSummary[] {
     votesByPlace.set(row.place, votes);
   }
 
-  return getTopWinningPlaces(chatId)
+  const winCounts = getTopWinningPlaces(chatId);
+  const knownPlaces = new Set(winCounts.map((w) => w.place));
+  const roster = [
+    ...winCounts,
+    ...Array.from(votesByPlace.keys())
+      .filter((place) => !knownPlaces.has(place))
+      .map((place) => ({ place, wins: 0 })),
+  ];
+
+  return roster
     .map(({ place, wins }) => {
       const votes = votesByPlace.get(place) ?? [];
       const starVotes = votes.filter((v) => v.stars !== null).map((v) => v.stars as number);

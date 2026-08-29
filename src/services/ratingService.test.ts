@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { getRatingSurveyContext, isRatingSurveyEnabled, setRatingSurveyEnabled } from './ratingService.js';
+import {
+  clearSurveyPlaceOverride,
+  getRatingSurveyContext,
+  getSurveyPlaceOverride,
+  isRatingSurveyEnabled,
+  setRatingSurveyEnabled,
+  setSurveyPlaceOverride,
+} from './ratingService.js';
 import { blockUserFromGroup } from './submissionService.js';
 import { recordDraw } from '../storage/history.js';
 
@@ -65,4 +72,65 @@ test('a chat is rating-survey-enabled by default, and setRatingSurveyEnabled tog
 
   setRatingSurveyEnabled(chatId, true);
   assert.equal(isRatingSurveyEnabled(chatId), true);
+});
+
+test('setSurveyPlaceOverride redirects getRatingSurveyContext to the overridden place, not the draw winner', () => {
+  const chatId = -10006;
+  recordDraw({
+    chatId,
+    drawnAt: 1_700_000_000_000,
+    winner: { userId: 1, username: 'artem', place: 'Дежерьома' },
+    submissions: [
+      { userId: 1, username: 'artem', place: 'Дежерьома' },
+      { userId: 2, username: 'olya', place: 'Пузата хата' },
+    ],
+  });
+
+  const result = setSurveyPlaceOverride(chatId, 2, 999);
+  assert.equal(result.ok, true);
+
+  assert.equal(getRatingSurveyContext(chatId)?.winnerPlace, 'Пузата хата');
+  assert.deepEqual(getSurveyPlaceOverride(chatId), { place: 'Пузата хата', submitterUserId: 2 });
+});
+
+test('setSurveyPlaceOverride rejects a submitterUserId that never submitted to the latest draw', () => {
+  const chatId = -10007;
+  recordDraw({
+    chatId,
+    drawnAt: 1_700_000_000_000,
+    winner: { userId: 1, username: 'artem', place: 'Дежерьома' },
+    submissions: [{ userId: 1, username: 'artem', place: 'Дежерьома' }],
+  });
+
+  const result = setSurveyPlaceOverride(chatId, 999, 1);
+  assert.deepEqual(result, { ok: false, reason: 'invalid_submitter' });
+  assert.equal(getRatingSurveyContext(chatId)?.winnerPlace, 'Дежерьома'); // unchanged
+});
+
+test('setSurveyPlaceOverride rejects a chat with no draw at all yet', () => {
+  const result = setSurveyPlaceOverride(-10008, 1, 999);
+  assert.deepEqual(result, { ok: false, reason: 'no_draw' });
+});
+
+test('clearSurveyPlaceOverride returns the survey to the draw winner, and is a harmless no-op before any override', () => {
+  const chatId = -10009;
+  recordDraw({
+    chatId,
+    drawnAt: 1_700_000_000_000,
+    winner: { userId: 1, username: 'artem', place: 'Дежерьома' },
+    submissions: [
+      { userId: 1, username: 'artem', place: 'Дежерьома' },
+      { userId: 2, username: 'olya', place: 'Пузата хата' },
+    ],
+  });
+
+  clearSurveyPlaceOverride(chatId); // nothing set yet — must not throw
+  assert.equal(getRatingSurveyContext(chatId)?.winnerPlace, 'Дежерьома');
+
+  setSurveyPlaceOverride(chatId, 2, 999);
+  assert.equal(getRatingSurveyContext(chatId)?.winnerPlace, 'Пузата хата');
+
+  clearSurveyPlaceOverride(chatId);
+  assert.equal(getRatingSurveyContext(chatId)?.winnerPlace, 'Дежерьома');
+  assert.equal(getSurveyPlaceOverride(chatId), undefined);
 });

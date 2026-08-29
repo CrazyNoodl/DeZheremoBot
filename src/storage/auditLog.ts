@@ -15,6 +15,8 @@ export type AdminAction =
   | 'rating_toggle'
   | 'edit_rating'
   | 'send_rating_survey'
+  | 'override_rating_place'
+  | 'reset_rating_place'
   | 'edit_timeslot_days'
   | 'edit_timeslot_times'
   | 'toggle_timeslot_poll';

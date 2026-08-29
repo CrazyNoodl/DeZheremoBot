@@ -20,7 +20,14 @@ import {
   resumeGroup,
   unblockUserFromGroup,
 } from '../services/submissionService.js';
-import { getRatingSurveyContext, isRatingSurveyEnabled, setRatingSurveyEnabled } from '../services/ratingService.js';
+import {
+  clearSurveyPlaceOverride,
+  getRatingSurveyContext,
+  getSurveyPlaceOverride,
+  isRatingSurveyEnabled,
+  setRatingSurveyEnabled,
+  setSurveyPlaceOverride,
+} from '../services/ratingService.js';
 import { getSchedule } from '../services/scheduleService.js';
 import { getTimeSlotSuggestion, isTimeSlotPollEnabled, setTimeSlotPollEnabled } from '../services/timeSlotPollService.js';
 import { listAdminActions, logAdminAction, type AdminAction, type AdminActionRecord } from '../storage/auditLog.js';
@@ -212,6 +219,8 @@ const ADMIN_ACTION_LABELS: Record<AdminAction, string> = {
   rating_toggle: 'Перемкнув опитування',
   edit_rating: 'Змінив розклад опитування',
   send_rating_survey: 'Надіслав опитування',
+  override_rating_place: 'Змінив місце для опитування',
+  reset_rating_place: 'Скинув місце для опитування',
   edit_timeslot_days: 'Змінив дні опитування про час',
   edit_timeslot_times: 'Змінив години опитування про час',
   toggle_timeslot_poll: 'Перемкнув опитування про час',
@@ -358,6 +367,7 @@ function buildRatingHubKeyboard(chatId: number, enabled: boolean) {
   return Markup.inlineKeyboard([
     [Markup.button.callback(enabled ? '🔕 Вимкнути' : '🔛 Увімкнути', `admin:rating_survey_toggle:${chatId}`)],
     [Markup.button.callback('📤 Надіслати опитування зараз', `admin:rating_targets:${chatId}`)],
+    [Markup.button.callback('📍 Фактичне місце опитування', `admin:rating_place:${chatId}`)],
     [Markup.button.callback('‹ Назад', `admin:select:${chatId}`)],
   ]);
 }
@@ -365,6 +375,50 @@ function buildRatingHubKeyboard(chatId: number, enabled: boolean) {
 async function renderRatingHub(ctx: Context, userId: number, chatId: number): Promise<void> {
   const enabled = isRatingSurveyEnabled(chatId);
   await panel.update(ctx, userId, buildRatingHubText(enabled), buildRatingHubKeyboard(chatId, enabled));
+}
+
+// Covers "winner couldn't make it, group went to a different place from this week's submissions
+// instead" — lets an admin correct which place the survey (both the automatic Sunday send and the
+// manual "📤 Надіслати опитування зараз" above) actually asks about, without touching the draw
+// record or win-count statistics (getRatingSurveyContext already folds the override in for both
+// send paths — see "Manual place override for the rating survey" in CLAUDE.md). Restricted to that
+// week's actual submitters (getRatingSurveyContext's own recipients list) rather than free text, so
+// there's no way to point the survey at a place nobody in the group actually proposed.
+function buildRatingPlaceText(chatId: number): string {
+  const context = getRatingSurveyContext(chatId);
+  if (!context) {
+    return '📍 Фактичне місце опитування\n\nЩе не було завершеного жеребкування з переможцем — нема що змінювати.';
+  }
+  const override = getSurveyPlaceOverride(chatId);
+  return (
+    `📍 Фактичне місце опитування\n\n` +
+    `Якщо переможець розіграшу не зміг піти і компанія обрала інше місце зі списку заявок — обери його тут, і саме про нього запитає опитування. Сам розіграш і статистика перемог не зміняться.\n\n` +
+    `Зараз опитування питає про: «${placeLabel(context.winnerPlace)}»${override ? ' (змінено вручну)' : ''}\n\n` +
+    `Куди пішли по факту?`
+  );
+}
+
+function buildRatingPlaceKeyboard(chatId: number) {
+  const context = getRatingSurveyContext(chatId);
+  if (!context) {
+    return Markup.inlineKeyboard([[Markup.button.callback('‹ Назад', `admin:rating:${chatId}`)]]);
+  }
+  const override = getSurveyPlaceOverride(chatId);
+  const rows = context.recipients.map((s) => [
+    Markup.button.callback(
+      `${override?.submitterUserId === s.userId ? '✅' : '◻️'} ${placeLabel(s.place)} (${displayName(s.username, s.userId)})`,
+      `admin:rating_place_set:${chatId}:${s.userId}`,
+    ),
+  ]);
+  if (override) {
+    rows.push([Markup.button.callback('↩️ Скинути (переможець розіграшу)', `admin:rating_place_reset:${chatId}`)]);
+  }
+  rows.push([Markup.button.callback('‹ Назад', `admin:rating:${chatId}`)]);
+  return Markup.inlineKeyboard(rows);
+}
+
+async function renderRatingPlacePanel(ctx: Context, userId: number, chatId: number): Promise<void> {
+  await panel.update(ctx, userId, buildRatingPlaceText(chatId), buildRatingPlaceKeyboard(chatId));
 }
 
 // Not rendered as HTML (parse_mode is never set for this panel, unlike group announcements), so
@@ -815,6 +869,28 @@ export async function handleAdminAction(ctx: Context): Promise<void> {
     setRatingSurveyEnabled(chatId, next);
     logAdminAction({ chatId, actorUserId: userId, actorName, action: 'rating_toggle', detail: next ? 'on' : 'off' });
     await renderRatingHub(ctx, userId, chatId);
+    return;
+  }
+
+  if (action === 'rating_place') {
+    await renderRatingPlacePanel(ctx, userId, chatId);
+    return;
+  }
+
+  if (action === 'rating_place_set') {
+    if (targetUserId === undefined) return;
+    const result = setSurveyPlaceOverride(chatId, targetUserId, userId);
+    if (result.ok) {
+      logAdminAction({ chatId, actorUserId: userId, actorName, action: 'override_rating_place', detail: `target:${targetUserId}` });
+    }
+    await renderRatingPlacePanel(ctx, userId, chatId);
+    return;
+  }
+
+  if (action === 'rating_place_reset') {
+    clearSurveyPlaceOverride(chatId);
+    logAdminAction({ chatId, actorUserId: userId, actorName, action: 'reset_rating_place' });
+    await renderRatingPlacePanel(ctx, userId, chatId);
     return;
   }
 
